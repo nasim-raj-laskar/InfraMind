@@ -1,1 +1,10 @@
 # Astro Runtime includes the following pre-installed providers packages: https://www.astronomer.io/docs/astro/runtime-image-architecture#provider-packages
+boto3
+botocore
+Pydantic
+langchain
+awscli
+langchain-community
+langchain-aws
+faiss-cpu
+python-dotenv

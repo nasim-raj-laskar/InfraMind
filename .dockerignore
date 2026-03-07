@@ -3,6 +3,7 @@ astro
 .env
 airflow_settings.yaml
 logs/
-.venv
+.venv/
 airflow.db
 airflow.cfg
+bedrock_enjoyer_accessKeys.csv
