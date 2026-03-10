@@ -9,4 +9,4 @@ langchain-aws
 faiss-cpu
 python-dotenv
 mlflow
-sagemaker-mlflow
+dagshub
