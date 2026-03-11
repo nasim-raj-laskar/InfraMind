@@ -8,5 +8,7 @@ langchain-community
 langchain-aws
 faiss-cpu
 python-dotenv
+ipykernel
 mlflow
 dagshub
+deepeval
