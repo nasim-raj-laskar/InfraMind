@@ -10,3 +10,4 @@ webserver_config.py
 airflow.cfg
 airflow.db
 bedrock_enjoyer_accessKeys.csv
+tests/.deepeval/
