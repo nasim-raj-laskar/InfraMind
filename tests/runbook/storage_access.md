@@ -1,90 +1,227 @@
 # Storage Access Runbook
 
 ## Overview
-This runbook covers storage-related incidents, persistent volume issues, and data access problems for InfraMind infrastructure.
+This runbook covers storage-related incidents, persistent volume issues, and data access problems for InfraMind infrastructure on AWS EKS using EBS and EFS volumes.
 
-## Common Storage Issues
+---
 
-### Persistent Volume Mount Failures
+## CRITICAL: Storage Error Quick Reference
+
+| Error | Likely cause | First action |
+|---|---|---|
+| `FailedMount: timeout` | EBS volume stuck attached to old node | Force detach from AWS console |
+| `Multi-Attach error` | EBS (RWO) mounted on 2 nodes | Delete stuck pod, let scheduler reassign |
+| `no space left on device` | PV full or EBS volume full | Expand PVC or clean up data |
+| `StorageClass not found` | SC deleted or wrong name | `kubectl get storageclass` |
+| `Pod stuck ContainerCreating` | PVC not bound | Check PVC status and provisioner logs |
+| `Permission denied on /data` | fsGroup mismatch | Check pod securityContext fsGroup |
+
+---
+
+## Issue 1: Pod Stuck in ContainerCreating (Volume Not Mounting)
+
 **Symptoms:**
-- Pods stuck in `ContainerCreating` state
-- `FailedMount` events in pod descriptions
-- `no space left on device` errors
+- Pod stuck in `ContainerCreating` for more than 2 minutes
+- `FailedMount` in pod events
+- `kubectl describe pod` shows volume attachment pending
 
-**Immediate Actions:**
-1. Check PV status: `kubectl get pv,pvc -A`
-2. Describe failing pod: `kubectl describe pod pod-name`
-3. Verify storage class: `kubectl get storageclass`
-
-**Root Cause Analysis:**
-- Storage provisioner issues
-- Insufficient storage capacity
-- Permission/access control problems
-- Node storage exhaustion
-
-### Volume Attachment Problems
-**Symptoms:**
-- Pods cannot start due to volume attachment failures
-- `Multi-Attach error` for volumes
-- Storage driver errors in node logs
-
-**Immediate Actions:**
-1. Check volume attachments: `kubectl get volumeattachment`
-2. Verify node capacity: `kubectl describe node node-name`
-3. Check CSI driver status: `kubectl get pods -n kube-system -l app=csi-driver`
-
-### Data Corruption or Loss
-**Symptoms:**
-- Application data inconsistencies
-- File system errors
-- Backup restoration failures
-
-**Immediate Actions:**
-1. Stop affected applications immediately
-2. Create emergency snapshot: `kubectl create volumesnapshot emergency-snap --source-pvc=data-pvc`
-3. Run file system check: `fsck /dev/disk-device`
-
-## Storage Troubleshooting
-
-### PVC Debugging
+**Diagnosis:**
 ```bash
-# Check PVC status and events
-kubectl describe pvc pvc-name
+# Step 1: Check pod events
+kubectl describe pod <pod-name> | grep -A 20 Events
 
-# Verify storage class configuration
-kubectl describe storageclass storage-class-name
+# Step 2: Check PVC is Bound
+kubectl get pvc -n <namespace>
+# STATUS must be "Bound" — if "Pending", provisioning failed
 
-# Check provisioner logs
-kubectl logs -n kube-system -l app=storage-provisioner
+# Step 3: If PVC Pending, check provisioner
+kubectl describe pvc <pvc-name>
+kubectl get events -n <namespace> --sort-by=.metadata.creationTimestamp | tail -20
+
+# Step 4: Check CSI driver pods are healthy
+kubectl get pods -n kube-system -l app=ebs-csi-controller
+kubectl get pods -n kube-system -l app=ebs-csi-node
+
+# Step 5: Check VolumeAttachment objects
+kubectl get volumeattachment
 ```
 
-### Volume Snapshot Operations
+**Root Cause Analysis:**
+- EBS volume stuck in "attaching" state from a previous node crash
+- CSI driver pod is down or crashing
+- Node doesn't have permission to attach EBS (missing IAM role policy)
+- Availability zone mismatch — EBS volume in us-east-1a but pod scheduled to us-east-1b
+
+**Immediate Fix:**
+```bash
+# If EBS volume is stuck attaching — force detach from AWS
+aws ec2 describe-volumes --filters Name=status,Values=in-use \
+  --query 'Volumes[*].[VolumeId,Attachments[0].State,Attachments[0].InstanceId]'
+
+aws ec2 detach-volume --volume-id <vol-id> --force
+
+# Restart CSI controller to clear stale state
+kubectl rollout restart deployment/ebs-csi-controller -n kube-system
+
+# If AZ mismatch, add node affinity to pod spec to match volume's AZ
+# Or delete PVC+PV and recreate in the correct AZ
+```
+
+---
+
+## Issue 2: Multi-Attach Error (EBS RWO Volume)
+
+**Symptoms:**
+- `Multi-Attach error for volume: Volume is already exclusively attached`
+- Pod cannot start after node failure or rolling update
+
+**Diagnosis:**
+```bash
+# Find which node the volume is still attached to
+kubectl get volumeattachment -o wide
+
+# Check if the old pod/node is actually gone
+kubectl get nodes
+kubectl get pod <old-pod> -o wide
+```
+
+**Root Cause Analysis:**
+- EBS volumes are ReadWriteOnce (RWO) — only one node at a time
+- Node crashed without gracefully detaching volumes
+- Kubernetes hasn't cleaned up the VolumeAttachment object yet
+
+**Immediate Fix:**
+```bash
+# Delete the stuck VolumeAttachment (Kubernetes will recreate it correctly)
+kubectl delete volumeattachment <attachment-name>
+
+# If node is NotReady/dead, force delete the old pod
+kubectl delete pod <stuck-pod> --grace-period=0 --force
+```
+
+---
+
+## Issue 3: No Space Left on Device
+
+**Symptoms:**
+- `no space left on device` in application or DB logs
+- Database write failures
+- Application crashes on file write
+
+**Diagnosis:**
+```bash
+# Check from inside the pod
+kubectl exec -it <pod> -- df -h
+
+# Check EBS volume usage in AWS
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/EBS \
+  --metric-name VolumeConsumedReadWriteOps \
+  --dimensions Name=VolumeId,Value=<vol-id> \
+  --start-time $(date -u -d '1 hour ago' +%FT%TZ) \
+  --end-time $(date -u +%FT%TZ) \
+  --period 300 --statistics Sum
+
+# Find what's eating the space
+kubectl exec -it <pod> -- du -sh /* 2>/dev/null | sort -rh | head -20
+```
+
+**Immediate Fix:**
+```bash
+# Expand the PVC (StorageClass must have allowVolumeExpansion: true)
+kubectl patch pvc <pvc-name> -n <namespace> \
+  -p '{"spec":{"resources":{"requests":{"storage":"50Gi"}}}}'
+
+# Watch expansion
+kubectl get pvc <pvc-name> -w
+
+# Clean up logs immediately if that's the culprit
+kubectl exec -it <pod> -- find /var/log -name "*.log" -mtime +7 -delete
+```
+
+---
+
+## Issue 4: Permission Denied on Mounted Volume
+
+**Symptoms:**
+- `permission denied` when app tries to write to `/data` or mount path
+- App starts but immediately crashes with permission error
+
+**Diagnosis:**
+```bash
+# Check what user the app runs as
+kubectl exec -it <pod> -- id
+
+# Check mount point permissions
+kubectl exec -it <pod> -- ls -la /data
+
+# Check pod securityContext
+kubectl get pod <pod> -o yaml | grep -A 10 securityContext
+```
+
+**Root Cause Analysis:**
+- `fsGroup` in pod securityContext doesn't match the volume's ownership
+- Volume was created with root ownership but app runs as non-root
+
+**Fix:**
 ```yaml
-# Create volume snapshot
+# Set fsGroup to match the app's GID
+spec:
+  securityContext:
+    fsGroup: 1000          # Kubernetes will chown the volume to this group
+    runAsUser: 1000
+    runAsGroup: 1000
+  containers:
+  - name: app
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+```
+
+---
+
+## Issue 5: Data Corruption or Backup Failure
+
+**Symptoms:**
+- Application data inconsistencies
+- File system errors (`fsck` needed)
+- Snapshot creation failing
+
+**Immediate Actions:**
+```bash
+# FIRST: Stop writes to prevent further corruption
+kubectl scale deployment <app> --replicas=0
+
+# Create emergency snapshot BEFORE any recovery attempt
+kubectl apply -f - <<EOF
 apiVersion: snapshot.storage.k8s.io/v1
 kind: VolumeSnapshot
 metadata:
-  name: data-snapshot
+  name: emergency-snap-$(date +%Y%m%d-%H%M)
 spec:
   source:
-    persistentVolumeClaimName: data-pvc
-  volumeSnapshotClassName: csi-snapclass
+    persistentVolumeClaimName: <pvc-name>
+  volumeSnapshotClassName: csi-aws-vsc
+EOF
+
+# Run fsck on detached volume (must detach first)
+aws ec2 detach-volume --volume-id <vol-id>
+# Attach to a maintenance EC2 instance
+aws ec2 attach-volume --volume-id <vol-id> --instance-id <maint-instance> --device /dev/xvdf
+# SSH to maintenance instance and run:
+# sudo fsck -y /dev/xvdf
 ```
 
-### Emergency Storage Expansion
+---
+
+## Recovery: Restore from Snapshot
+
 ```bash
-# Patch PVC to increase size
-kubectl patch pvc data-pvc -p '{"spec":{"resources":{"requests":{"storage":"100Gi"}}}}'
+# List available snapshots
+kubectl get volumesnapshot -n <namespace>
 
-# Verify expansion
-kubectl get pvc data-pvc -w
-```
-
-## Recovery Procedures
-
-### Restore from Snapshot
-```yaml
-# Create PVC from snapshot
+# Restore into a new PVC
+kubectl apply -f - <<EOF
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -96,129 +233,56 @@ spec:
     requests:
       storage: 50Gi
   dataSource:
-    name: data-snapshot
+    name: <snapshot-name>
     kind: VolumeSnapshot
     apiGroup: snapshot.storage.k8s.io
+EOF
 ```
 
-### Migrate Data Between Volumes
-```bash
-# Create migration job
-kubectl create job data-migration --image=busybox -- sh -c "cp -r /source/* /destination/"
+---
 
-# Mount both volumes to migration pod
-kubectl patch job data-migration -p '{"spec":{"template":{"spec":{"volumes":[{"name":"source","persistentVolumeClaim":{"claimName":"old-pvc"}},{"name":"dest","persistentVolumeClaim":{"claimName":"new-pvc"}}]}}}}'
-```
+## Storage Classes (InfraMind Standard)
 
-### Storage Class Migration
-```bash
-# Create new PVC with different storage class
-kubectl apply -f new-storage-class-pvc.yaml
-
-# Use data migration job to copy data
-kubectl create job storage-migration --image=alpine -- sh -c "cp -r /old-data/* /new-data/"
-```
-
-## Performance Optimization
-
-### Storage Performance Testing
-```bash
-# Run I/O performance test
-kubectl run storage-test --image=busybox --rm -it -- sh
-dd if=/dev/zero of=/data/testfile bs=1M count=1000 oflag=direct
-
-# Check IOPS performance
-fio --name=random-write --ioengine=libaio --rw=randwrite --bs=4k --size=1G --numjobs=1 --iodepth=1 --runtime=60 --time_based --group_reporting
-```
-
-### Storage Monitoring
-```bash
-# Check node storage usage
-kubectl top nodes
-
-# Monitor PVC usage
-kubectl get pvc -A -o custom-columns=NAME:.metadata.name,CAPACITY:.spec.resources.requests.storage,USED:.status.capacity.storage
-
-# Check storage driver metrics
-kubectl get --raw /metrics | grep storage
-```
-
-## Backup and Disaster Recovery
-
-### Automated Backup Strategy
 ```yaml
-# Scheduled volume snapshots
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: daily-backup
-spec:
-  schedule: "0 2 * * *"
-  jobTemplate:
-    spec:
-      template:
-        spec:
-          containers:
-          - name: backup
-            image: backup-tool:latest
-            command: ["create-snapshot"]
-```
-
-### Cross-Region Backup
-```bash
-# Export snapshot to object storage
-kubectl create job backup-export --image=backup-tool -- export-snapshot snapshot-name s3://backup-bucket/
-
-# Verify backup integrity
-kubectl create job backup-verify --image=backup-tool -- verify-backup s3://backup-bucket/snapshot-name
-```
-
-## Storage Security
-
-### Access Control
-```yaml
-# Pod Security Context for storage access
-apiVersion: v1
-kind: Pod
-spec:
-  securityContext:
-    runAsUser: 1000
-    runAsGroup: 1000
-    fsGroup: 1000
-  containers:
-  - name: app
-    securityContext:
-      allowPrivilegeEscalation: false
-      readOnlyRootFilesystem: true
-```
-
-### Encryption at Rest
-```yaml
-# Storage class with encryption
+# Standard gp3 — general purpose
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: encrypted-storage
-provisioner: kubernetes.io/aws-ebs
+  name: gp3-standard
+provisioner: ebs.csi.aws.com
 parameters:
   type: gp3
   encrypted: "true"
-  kmsKeyId: "arn:aws:kms:region:account:key/key-id"
+reclaimPolicy: Retain          # IMPORTANT: Retain prevents accidental data loss
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer   # Ensures AZ match with pod
 ```
 
-## Monitoring and Alerts
+**Always use `reclaimPolicy: Retain`** — `Delete` will destroy the EBS volume when the PVC is deleted. For production data, always Retain and clean up manually.
 
-### Key Storage Metrics
-- PVC usage percentage
-- Volume attachment failures
-- Storage provisioning errors
-- Backup success rates
+**Always use `volumeBindingMode: WaitForFirstConsumer`** — prevents the Multi-Attach AZ mismatch issue by waiting to see which node the pod lands on before provisioning the EBS volume.
 
-### Critical Alerts
-- Storage usage > 85%
-- PVC mount failures
-- Snapshot creation failures
-- Data corruption detected
+---
+
+## Monitoring & Alerts
+
+```bash
+# Check all PVC statuses
+kubectl get pvc -A
+
+# Find any pods with volume issues
+kubectl get events -A --field-selector reason=FailedMount
+
+# Check CSI driver health
+kubectl get pods -n kube-system | grep csi
+```
+
+**Critical Alert Thresholds:**
+- EBS volume usage > 80% → expand immediately
+- PVC in Pending state > 5 minutes → provisioner issue
+- VolumeAttachment stuck > 10 minutes → force detach
+
+---
 
 ## Escalation Contacts
 - **Storage Team:** storage-team@company.com
