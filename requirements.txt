@@ -12,3 +12,4 @@ ipykernel
 mlflow
 dagshub
 deepeval
+chromadb

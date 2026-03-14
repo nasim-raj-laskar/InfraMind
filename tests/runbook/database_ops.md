@@ -55,11 +55,14 @@ These are **different failures** requiring different responses. Never conflate t
    ```
 
 **Root Cause Analysis:**
-- RDS instance stopped, rebooting, or in maintenance window
-- Security group rule missing or misconfigured for the node subnet
+- RDS instance stopped, rebooting, or in maintenance window — MOST LIKELY CAUSE
+- Security group blocking port 3306/5432 from EKS node subnet
+- RDS max_connections reached — server actively refusing new connections
 - Wrong port in application config (MySQL: 3306, PostgreSQL: 5432)
-- RDS max_connections reached — new connections actively refused
-- VPC routing issue between EKS node subnet and RDS subnet
+
+**IMPORTANT: "connection refused" means server is reachable but REJECTING the
+connection. VPC routing failures cause TIMEOUT or "no route to host" — NEVER
+"connection refused". Do NOT investigate VPC routing for this error.**
 
 **Immediate Fix:**
 ```bash
