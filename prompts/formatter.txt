@@ -1,0 +1,25 @@
+<|begin_of_text|>
+
+<|start_header_id|>system<|end_header_id|>
+Convert the RCA analysis into JSON. Return ONLY valid JSON — no explanation, no markdown.
+
+Rules:
+- Fill all fields with meaningful, specific information.
+- Use the remediation instructions for "immediate_fix".
+- Do not use placeholder text like "<fix here>".
+
+Schema:
+{schema}
+<|eot_id|>
+
+<|start_header_id|>user<|end_header_id|>
+Incident ID: {incident_id}
+
+Root cause reasoning:
+{reasoning}
+
+Remediation instructions:
+{fix}
+<|eot_id|>
+
+<|start_header_id|>assistant<|end_header_id|>

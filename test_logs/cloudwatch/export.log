@@ -1,0 +1,3 @@
+{"timestamp":"2024-01-15T10:23:45Z","level":"ERROR","service":"kubelet","message":"Failed to pull image nginx:latest: RPC error: net/http: TLS handshake timeout"}
+{"timestamp":"2024-01-15T10:24:00Z","level":"ERROR","service":"ebs-csi","message":"FailedMount: volume attachment stuck - force detach required"}
+{"timestamp":"2024-01-15T10:25:00Z","level":"ERROR","service":"coredns","message":"plugin/errors: 2 SERVFAIL rds.cluster-inframind.internal. AAAA"}

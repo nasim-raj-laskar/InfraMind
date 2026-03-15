@@ -1,0 +1,11 @@
+version: "3"
+services:
+  scheduler:
+    volumes:
+      - ./chroma_db:/usr/local/airflow/chroma_db
+  webserver:
+    volumes:
+      - ./chroma_db:/usr/local/airflow/chroma_db
+  triggerer:
+    volumes:
+      - ./chroma_db:/usr/local/airflow/chroma_db

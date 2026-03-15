@@ -1,0 +1,37 @@
+vectordb:
+  path: ./chroma_db
+  collection: inframind_runbooks
+  chunk_k: 6
+  max_distance: 0.45
+  batch_size: 10
+
+pipeline:
+  max_retries: 2
+  quality_threshold: 0.8
+  log_size_threshold: 2000   # chars — below = 8B, above = 70B
+
+runbook:
+  dir: ./runbook
+  glob: "*.md"
+  headers:
+    - ["#",   "H1"]
+    - ["##",  "H2"]
+    - ["###", "H3"]
+
+mlflow:
+  experiment_name: inframind_experiment
+
+retrieval:
+  query_suffix: "root cause diagnosis troubleshooting"
+
+api:
+  host: 0.0.0.0
+  port: 8000
+  reload: true
+
+airflow:
+  dag_id: inframind_rca_pipeline
+  schedule: "@hourly"
+  s3_bucket: inframind-data-hub 
+  s3_prefix: raw/
+  s3_results_prefix: rca-results/
