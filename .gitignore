@@ -13,3 +13,6 @@ bedrock_enjoyer_accessKeys.csv
 notebook/.deepeval/
 inframind_structure.svg
 notebook/.ipynb_checkpoints/
+PREFLIGHT_CHECKLIST.md
+AIRFLOW_SETUP.md
+FIXES_APPLIED.md
