@@ -10,4 +10,6 @@ webserver_config.py
 airflow.cfg
 airflow.db
 bedrock_enjoyer_accessKeys.csv
-tests/.deepeval/
+notebook/.deepeval/
+inframind_structure.svg
+notebook/.ipynb_checkpoints/
