@@ -1,9 +1,8 @@
-version: "3"
 services:
   scheduler:
     volumes:
       - ./chroma_db:/usr/local/airflow/chroma_db
-  webserver:
+  dag-processor:
     volumes:
       - ./chroma_db:/usr/local/airflow/chroma_db
   triggerer:

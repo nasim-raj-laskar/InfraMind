@@ -17,6 +17,9 @@ os.environ["MLFLOW_TRACKING_PASSWORD"] = os.getenv("DAGSHUB_TOKEN", "")
 
 
 def setup_mlflow():
+    # Re-read credentials here in case .env wasn't loaded at import time
+    os.environ["MLFLOW_TRACKING_USERNAME"] = os.getenv("DAGSHUB_USERNAME", "")
+    os.environ["MLFLOW_TRACKING_PASSWORD"] = os.getenv("DAGSHUB_TOKEN", "")
     mlflow.set_tracking_uri(MLFLOW_URI)
     mlflow.set_experiment(MLFLOW_EXPERIMENT)
     logger.info("MLflow tracking URI: %s", MLFLOW_URI)

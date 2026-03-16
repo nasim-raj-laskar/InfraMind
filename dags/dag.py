@@ -43,20 +43,19 @@ default_args = {
 def task_fetch_logs(**context) -> list[str]:
     """
     Task 1 — Fetch raw logs from S3.
-    Uses date partition from Airflow execution date for reliable backfilling.
+    Scans the entire raw/ prefix — no date partitioning.
     """
-    from dags.ingestion import fetch_logs_by_date
+    from dags.ingestion import fetch_logs_from_s3
 
-    date_path = context["ds"].replace("-", "/")   # "2024-03-15" → "2024/03/15"
-    bucket    = Variable.get("INFRAMIND_S3_BUCKET", default_var="inframind-data-hub")
+    bucket   = Variable.get("INFRAMIND_S3_BUCKET", default_var="inframind-data-hub")
+    prefix   = Variable.get("INFRAMIND_S3_PREFIX", default_var="raw/")
+    max_logs = int(Variable.get("INFRAMIND_MAX_LOGS", default_var="3"))
 
-    logs = fetch_logs_by_date(
-        date=date_path,
-        bucket=bucket,
-    )
+    logs, keys = fetch_logs_from_s3(bucket=bucket, prefix=prefix, max_logs=max_logs)
 
     logger.info("Fetched %d logs from S3", len(logs))
-    context["ti"].xcom_push(key="raw_logs", value=logs)
+    context["ti"].xcom_push(key="raw_logs",  value=logs)
+    context["ti"].xcom_push(key="s3_keys",   value=keys)
     return logs
 
 
@@ -174,10 +173,12 @@ def task_post_results(**context):
     """
     import boto3
     from config.config import AWS_ACCESS_KEY, AWS_SECRET_KEY, S3_BUCKET
+    from dags.ingestion import move_to_processed
 
     results  = context["ti"].xcom_pull(key="rca_results", task_ids="run_rca")
-    run_date = datetime.utcnow().strftime("%Y/%m/%d/%H%M%S")
-    key      = f"rca-results/{run_date}/results.json"
+    s3_keys  = context["ti"].xcom_pull(key="s3_keys",     task_ids="fetch_logs")
+    run_ts   = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    key      = f"rca-results/results_{run_ts}.json"
 
     s3 = boto3.client(
         "s3",
@@ -191,8 +192,12 @@ def task_post_results(**context):
         Body=json.dumps(results, indent=2),
         ContentType="application/json",
     )
-
     logger.info("Results saved to s3://%s/%s", S3_BUCKET, key)
+
+    # Move processed logs raw/ → processed/
+    if s3_keys:
+        move_to_processed(bucket=S3_BUCKET, keys=s3_keys)
+        logger.info("Moved %d logs to processed/", len(s3_keys))
 
     # ── Optional: Slack alert for Critical/High severity ──────────────
     slack_webhook = Variable.get("INFRAMIND_SLACK_WEBHOOK", default_var=None)
@@ -228,8 +233,7 @@ with DAG(
     dag_id="inframind_rca_pipeline",
     default_args=default_args,
     description="Automated RCA pipeline — S3 logs → normalize → embed → RCA → results",
-    schedule_interval="@hourly",
-    start_date=datetime(2024, 1, 1),
+    schedule=None,
     catchup=False,
     tags=["inframind", "llmops", "rca"],
 ) as dag:
