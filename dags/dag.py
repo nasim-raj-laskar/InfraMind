@@ -172,7 +172,7 @@ def task_post_results(**context):
     Extend here to add Slack alerts, PagerDuty, webhooks, etc.
     """
     import boto3
-    from config.config import AWS_ACCESS_KEY, AWS_SECRET_KEY, S3_BUCKET
+    from config.config import S3_BUCKET
     from dags.ingestion import move_to_processed
 
     results  = context["ti"].xcom_pull(key="rca_results", task_ids="run_rca")
@@ -180,11 +180,7 @@ def task_post_results(**context):
     run_ts   = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     key      = f"rca-results/results_{run_ts}.json"
 
-    s3 = boto3.client(
-        "s3",
-        aws_access_key_id=AWS_ACCESS_KEY,
-        aws_secret_access_key=AWS_SECRET_KEY,
-    )
+    s3 = boto3.client("s3")
 
     s3.put_object(
         Bucket=S3_BUCKET,

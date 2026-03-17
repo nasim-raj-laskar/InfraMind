@@ -5,15 +5,11 @@ Used by the Airflow DAG. Can also be run standalone for testing.
 import boto3
 import logging
 from datetime import datetime, timedelta
-from config.config import AWS_ACCESS_KEY, AWS_SECRET_KEY, S3_BUCKET, S3_PREFIX
+from config.config import S3_BUCKET, S3_PREFIX
 
 logger = logging.getLogger("inframind.ingestion")
 
-s3_client = boto3.client(
-    "s3",
-    aws_access_key_id=AWS_ACCESS_KEY,
-    aws_secret_access_key=AWS_SECRET_KEY,
-)
+s3_client = boto3.client("s3")
 
 
 def _decode(raw_bytes: bytes) -> str:
