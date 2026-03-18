@@ -67,13 +67,13 @@ graph TB
     RCA_ORCH -."Evaluation".-> DEEPEVAL
     POST --> S3_OUT
     
-    style A1 fill:#e1f5ff
-    style A2 fill:#e1f5ff
-    style A3 fill:#e1f5ff
-    style A4 fill:#e1f5ff
-    style A5 fill:#ffe1e1
-    style CHROMA fill:#fff4e1
-    style MLFLOW fill:#e8f5e9
+    style A1 fill:#1a3a5c,color:#fff
+    style A2 fill:#1a3a5c,color:#fff
+    style A3 fill:#1a3a5c,color:#fff
+    style A4 fill:#1a3a5c,color:#fff
+    style A5 fill:#4a1a5c,color:#fff
+    style CHROMA fill:#4a3a1a,color:#fff
+    style MLFLOW fill:#1a4a2e,color:#fff
 ```
 
 ### Multi-Agent Workflow with Self-Correction
@@ -83,7 +83,7 @@ sequenceDiagram
     participant Airflow
     participant Orchestrator
     participant RAG as ChromaDB RAG
-    participant Bedrock as AWS Bedrock<br/>(Claude 3)
+    participant Bedrock as AWS Bedrock<br/>(Llama 3 / Mistral 7B)
     participant Critic
     participant MLflow
     participant S3
@@ -107,7 +107,7 @@ sequenceDiagram
         Bedrock-->>Orchestrator: Structured RCA JSON
         
         Orchestrator->>Critic: Evaluate RCA quality
-        Critic->>Bedrock: Score faithfulness + relevancy
+        Critic->>Bedrock: Score faithfulness + relevancy (Mistral-7B)
         Bedrock-->>Critic: Quality metrics
         Critic-->>Orchestrator: Score + feedback
         
@@ -155,8 +155,8 @@ graph LR
         RERANK --> CONTEXT
     end
     
-    style STORE fill:#fff4e1
-    style CONTEXT fill:#e8f5e9
+    style STORE fill:#4a3a1a,color:#fff
+    style CONTEXT fill:#1a4a2e,color:#fff
 ```
 
 ---
@@ -172,46 +172,51 @@ graph TB
     end
     
     subgraph "LLM Inference (AWS Bedrock)"
-        HAIKU["Claude 3 Haiku<br/>Fast inference<br/>$0.25/1M tokens"]
-        SONNET["Claude 3 Sonnet<br/>Complex reasoning<br/>$3/1M tokens"]
-        TITAN["Titan Embed v2<br/>1536-dim embeddings<br/>$0.0001/1K tokens"]
+        LLAMA8["Llama 3 8B<br/>Short logs ≤ 2000 chars<br/>$0.0003/1K input tokens"]
+        LLAMA70["Llama 3 70B<br/>Long logs > 2000 chars<br/>$0.00265/1K input tokens"]
+        MISTRAL["Mistral 7B<br/>Critic agent only<br/>Quality scoring"]
+        TITAN["Titan Embed v2<br/>1536-dim embeddings<br/>RAG indexing + retrieval"]
     end
     
     subgraph "Vector Store & RAG"
-        CHROMA["ChromaDB 0.4.x<br/>Persistent HNSW index<br/>Docker volume mount"]
-        LANGCHAIN["LangChain 0.1.x<br/>RAG orchestration<br/>Prompt templates"]
+        CHROMA["ChromaDB<br/>Persistent HNSW index<br/>Docker volume mount"]
+        LANGCHAIN["LangChain<br/>RAG orchestration<br/>Prompt templates"]
     end
     
     subgraph "LLMOps Observability"
         MLFLOW["MLflow 2.x<br/>DagsHub remote backend<br/>Experiment tracking"]
-        DEEPEVAL["DeepEval 0.21.x<br/>LLM-as-judge metrics<br/>Faithfulness + Relevancy"]
+        DEEPEVAL["DeepEval<br/>LLM-as-judge metrics<br/>Faithfulness + Relevancy"]
     end
     
     subgraph "Data Layer"
         S3["AWS S3<br/>Log storage + RCA results<br/>Lifecycle policies"]
     end
     
-    AIRFLOW --> HAIKU
-    AIRFLOW --> SONNET
+    AIRFLOW --> LLAMA8
+    AIRFLOW --> LLAMA70
+    AIRFLOW --> MISTRAL
     AIRFLOW --> CHROMA
     CHROMA --> TITAN
     LANGCHAIN --> CHROMA
-    LANGCHAIN --> HAIKU
-    HAIKU --> MLFLOW
-    SONNET --> MLFLOW
-    HAIKU --> DEEPEVAL
+    LANGCHAIN --> LLAMA8
+    LLAMA8 --> MLFLOW
+    LLAMA70 --> MLFLOW
+    MISTRAL --> MLFLOW
+    MISTRAL --> DEEPEVAL
     AIRFLOW --> S3
     
-    style HAIKU fill:#e1f5ff
-    style SONNET fill:#e1f5ff
-    style MLFLOW fill:#e8f5e9
-    style CHROMA fill:#fff4e1
+    style LLAMA8 fill:#1a3a5c,color:#fff
+    style LLAMA70 fill:#1a3a5c,color:#fff
+    style MISTRAL fill:#4a1a5c,color:#fff
+    style TITAN fill:#1a4a2e,color:#fff
+    style MLFLOW fill:#1a4a2e,color:#fff
+    style CHROMA fill:#4a3a1a,color:#fff
 ```
 
 | Component | Technology | Purpose |
 |-----------|-----------|----------|
 | **Orchestration** | Apache Airflow 3 (Astro CLI) | DAG-based pipeline scheduling, task dependency management |
-| **LLM Runtime** | AWS Bedrock (Claude 3 Haiku/Sonnet) | Serverless LLM inference with 200K context window |
+| **LLM Runtime** | AWS Bedrock (Llama 3 8B / 70B + Mistral 7B) | Serverless LLM inference — model auto-selected by log size |
 | **Embeddings** | AWS Bedrock Titan Embed v2 | 1536-dim semantic vectors for RAG retrieval |
 | **Vector DB** | ChromaDB 0.4.x | Persistent HNSW index with cosine similarity search |
 | **RAG Framework** | LangChain 0.1.x | Prompt engineering, retrieval chains, agent orchestration |
@@ -292,9 +297,9 @@ graph TB
     SCHEDULER --> MLFLOW
     TRIGGERER --> POSTGRES
     
-    style SCHEDULER fill:#e1f5ff
-    style CHROMA_VOL fill:#fff4e1
-    style BEDROCK fill:#ffe1e1
+    style SCHEDULER fill:#1a3a5c,color:#fff
+    style CHROMA_VOL fill:#4a3a1a,color:#fff
+    style BEDROCK fill:#4a1a1a,color:#fff
 ```
 
 ### Airflow DAG Task Dependencies
@@ -318,8 +323,8 @@ graph LR
     RCA -."XCom: rca_results".-> POST
     FETCH -."XCom: log_paths".-> NORM
     
-    style RCA fill:#e1f5ff
-    style POST fill:#e8f5e9
+    style RCA fill:#1a3a5c,color:#fff
+    style POST fill:#1a4a2e,color:#fff
 ```
 
 **Task Pool Configuration**
@@ -336,7 +341,7 @@ graph LR
 |-----------|-------------|-------|
 | **Astro CLI** | v1.20+ | [Install guide](https://www.astronomer.io/docs/astro/cli/install-cli) |
 | **Docker Desktop** | 4.25+ | 8GB RAM, 4 CPU cores recommended |
-| **AWS Account** | Bedrock enabled | Claude 3 + Titan Embed in `ap-south-1` region |
+| **AWS Account** | Bedrock enabled | Llama 3, Mistral 7B + Titan Embed in `ap-south-1` region |
 | **S3 Bucket** | Standard tier | Versioning + lifecycle policies recommended |
 | **DagsHub Account** | Free tier | MLflow tracking backend |
 
@@ -344,11 +349,10 @@ graph LR
 
 Enable the following models in AWS Console → Bedrock → Model access:
 
-```
-anthropic.claude-3-haiku-20240307-v1:0
-anthropic.claude-3-sonnet-20240229-v1:0
-amazon.titan-embed-text-v2:0
-```
+- `meta.llama3-8b-instruct-v1:0` — fast inference for short logs
+- `meta.llama3-70b-instruct-v1:0` — deep reasoning for large logs
+- `mistral.mistral-7b-instruct-v0:2` — critic / quality scoring agent
+- `amazon.titan-embed-text-v2:0` — RAG embeddings
 
 **Region**: `ap-south-1` (Mumbai) — lowest latency for Asia-Pacific
 
@@ -378,43 +382,9 @@ DAGSHUB_USERNAME=your_username
 DAGSHUB_TOKEN=your_dagshub_token
 MLFLOW_TRACKING_URI=https://dagshub.com/your_username/InfraMind.mlflow
 
-# Optional: Slack Notifications
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXX
 ```
 
-**IAM Policy for Bedrock + S3**:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream"
-      ],
-      "Resource": [
-        "arn:aws:bedrock:ap-south-1::foundation-model/anthropic.claude-3-*",
-        "arn:aws:bedrock:ap-south-1::foundation-model/amazon.titan-embed-*"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject",
-        "s3:ListBucket",
-        "s3:DeleteObject"
-      ],
-      "Resource": [
-        "arn:aws:s3:::your-bucket-name",
-        "arn:aws:s3:::your-bucket-name/*"
-      ]
-    }
-  ]
-}
-```
+The IAM policy should grant `bedrock:InvokeModel` on the four model ARNs above (`meta.llama3-*`, `mistral.mistral-7b-*`, `amazon.titan-embed-*`), plus `s3:GetObject`, `s3:PutObject`, `s3:ListBucket`, and `s3:DeleteObject` on your bucket.
 
 ### 3. Start Airflow Stack
 
@@ -517,8 +487,8 @@ graph TB
     RAW1 -."After RCA".-> PROC1
     RAW2 -."After RCA".-> PROC2
     
-    style RAW1 fill:#fff4e1
-    style RCA1 fill:#e8f5e9
+    style RAW1 fill:#4a3a1a,color:#fff
+    style RCA1 fill:#1a4a2e,color:#fff
 ```
 
 ### Automated Lifecycle Policies
@@ -595,7 +565,7 @@ graph TB
     LOADER --> AGENTS
     LOADER --> RAG
     
-    style LOADER fill:#fff4e1
+    style LOADER fill:#4a3a1a,color:#fff
 ```
 
 ### Key Configuration Parameters
@@ -613,20 +583,26 @@ graph TB
 
 **Model Configuration** (`config/models.yaml`)
 
-```yaml
-models:
-  investigator:
-    model_id: anthropic.claude-3-haiku-20240307-v1:0
-    temperature: 0.1
-    max_tokens: 2048
-  root_cause:
-    model_id: anthropic.claude-3-sonnet-20240229-v1:0
-    temperature: 0.0
-    max_tokens: 4096
-  critic:
-    model_id: anthropic.claude-3-sonnet-20240229-v1:0
-    temperature: 0.0
-    max_tokens: 1024
+The model used for Investigator, Root Cause, Fix Generator, and Formatter agents is chosen dynamically at runtime based on log size — Llama 3 8B for logs under 2000 characters, Llama 3 70B for anything larger. The Critic agent always uses Mistral 7B. Titan Embed v2 handles all RAG embeddings.
+
+```mermaid
+graph LR
+    LOG["Incoming Log"]
+    CHECK{"Log size > 2000 chars?"}
+    SMALL["Llama 3 8B\nInvestigator / Root Cause\nFix Generator / Formatter"]
+    LARGE["Llama 3 70B\nInvestigator / Root Cause\nFix Generator / Formatter"]
+    CRITIC["Mistral 7B\nCritic Agent\n(always)"]
+
+    LOG --> CHECK
+    CHECK -->|"No"| SMALL
+    CHECK -->|"Yes"| LARGE
+    SMALL --> CRITIC
+    LARGE --> CRITIC
+
+    style SMALL fill:#1a3a5c,color:#fff
+    style LARGE fill:#1a3a5c,color:#fff
+    style CRITIC fill:#4a1a5c,color:#fff
+    style CHECK fill:#4a3a1a,color:#fff
 ```
 
 **Airflow Variables** (Runtime Overrides)
@@ -662,7 +638,7 @@ Each RCA result in `s3://bucket/rca-results/results_YYYYMMDD_HHMMSS.json`:
     "Enable pgBouncer connection pooling layer"
   ],
   "confidence": 0.91,
-  "model_used": "anthropic.claude-3-haiku-20240307-v1:0",
+  "model_used": "meta.llama3-8b-instruct-v1:0",
   "mlflow_run_id": "a3f2c1b0d9e8f7a6b5c4d3e2f1a0b9c8",
   "attempts": 2,
   "final_score": 0.85,
@@ -706,8 +682,8 @@ graph LR
     CHECKS -->|"Valid"| METADATA
     CHECKS -->|"Invalid"| ERROR["Raise ValidationError<br/>Retry with feedback"]
     
-    style CHECKS fill:#fff4e1
-    style ERROR fill:#ffe1e1
+    style CHECKS fill:#4a3a1a,color:#fff
+    style ERROR fill:#4a1a1a,color:#fff
 ```
 
 ---
@@ -747,14 +723,14 @@ graph TB
     BACKEND --> UI
     ARTIFACTS --> UI
     
-    style TRACKER fill:#e8f5e9
-    style UI fill:#e1f5ff
+    style TRACKER fill:#1a4a2e,color:#fff
+    style UI fill:#1a3a5c,color:#fff
 ```
 
 ### Tracked Telemetry per RCA Execution
 
 **Parameters (Hyperparameters)**
-- `model_name`: Claude 3 Haiku / Sonnet
+- `model_name`: Llama 3 8B or 70B (auto-selected by log size) / Mistral 7B (critic)
 - `temperature`: 0.0 (deterministic) to 1.0 (creative)
 - `max_tokens`: Response length limit
 - `chunk_k`: RAG retrieval count
@@ -790,7 +766,7 @@ graph LR
         EVAL2["AnswerRelevancyMetric<br/>Query alignment"]
         EVAL3["ContextualRecallMetric<br/>Context utilization"]
         
-        JUDGE["Claude 3 Sonnet<br/>LLM-as-Judge"]
+        JUDGE["Mistral 7B<br/>LLM-as-Judge<br/>(Critic Agent)"]
         SCORES["Normalized Scores<br/>0.0 - 1.0"]
     end
     
@@ -808,8 +784,8 @@ graph LR
     JUDGE --> SCORES
     SCORES -."Log to MLflow".-> MLFLOW[("MLflow Tracking")]
     
-    style JUDGE fill:#ffe1e1
-    style MLFLOW fill:#e8f5e9
+    style JUDGE fill:#4a1a5c,color:#fff
+    style MLFLOW fill:#1a4a2e,color:#fff
 ```
 
 ---
@@ -845,8 +821,8 @@ graph LR
     
     NORM --> OUTPUT["Standardized JSON<br/>Ready for LLM ingestion"]
     
-    style DETECT fill:#fff4e1
-    style OUTPUT fill:#e8f5e9
+    style DETECT fill:#4a3a1a,color:#fff
+    style OUTPUT fill:#1a4a2e,color:#fff
 ```
 
 ### Normalized Output Schema
@@ -904,10 +880,10 @@ graph TB
     CRIT --> VARS
     
     VARS --> CHAIN
-    CHAIN --> BEDROCK["AWS Bedrock<br/>Claude 3 Inference"]
+    CHAIN --> BEDROCK["AWS Bedrock<br/>Llama 3 8B / 70B + Mistral 7B"]
     
-    style VARS fill:#fff4e1
-    style BEDROCK fill:#e1f5ff
+    style VARS fill:#4a3a1a,color:#fff
+    style BEDROCK fill:#1a3a5c,color:#fff
 ```
 
 ### Example: Root Cause Agent Prompt
@@ -966,59 +942,47 @@ graph TB
     end
     
     subgraph "Cost Calculation"
-        HAIKU["Claude 3 Haiku<br/>Input: $0.25/1M<br/>Output: $1.25/1M"]
-        SONNET["Claude 3 Sonnet<br/>Input: $3/1M<br/>Output: $15/1M"]
+        LLAMA8["Llama 3 8B<br/>Input: $0.0003/1K<br/>Output: $0.0006/1K"]
+        LLAMA70["Llama 3 70B<br/>Input: $0.00265/1K<br/>Output: $0.0035/1K"]
+        MISTRAL["Mistral 7B<br/>Critic only<br/>Low token count"]
         
-        COST["Per-RCA Cost<br/>Haiku: ~$0.005<br/>Sonnet: ~$0.045<br/>Mixed: ~$0.015"]
+        COST["Per-RCA Cost<br/>8B path: ~$0.003<br/>70B path: ~$0.018<br/>Avg mixed: ~$0.010"]
     end
     
-    INPUT --> HAIKU
-    OUTPUT --> HAIKU
-    INPUT --> SONNET
-    OUTPUT --> SONNET
+    INPUT --> LLAMA8
+    OUTPUT --> LLAMA8
+    INPUT --> LLAMA70
+    OUTPUT --> LLAMA70
+    INPUT --> MISTRAL
+    OUTPUT --> MISTRAL
     
-    HAIKU --> COST
-    SONNET --> COST
+    LLAMA8 --> COST
+    LLAMA70 --> COST
+    MISTRAL --> COST
     
-    style COST fill:#e8f5e9
+    style LLAMA8 fill:#1a3a5c,color:#fff
+    style LLAMA70 fill:#1a3a5c,color:#fff
+    style MISTRAL fill:#4a1a5c,color:#fff
+    style COST fill:#1a4a2e,color:#fff
 ```
 
 ### Cost Optimization Strategies
 
-**1. Model Selection by Agent**
-- **Investigator, Formatter**: Haiku (fast, cheap, deterministic)
-- **Root Cause, Critic**: Sonnet (complex reasoning required)
-- **Fix Generator**: Haiku (template-based output)
+**1. Dynamic Model Selection**
+- **Investigator, Root Cause, Fix Generator, Formatter**: Llama 3 8B for short logs (≤ 2000 chars), Llama 3 70B for long logs — decided automatically at runtime
+- **Critic**: Always Mistral 7B
 
-**2. Context Window Management**
-```python
-# Truncate logs to max 2000 tokens
-log_content = tokenizer.truncate(log, max_tokens=2000)
+**2. Context Window Management** — logs are truncated at 2000 characters (the model-selection threshold), and RAG retrieval is capped at top-6 chunks.
 
-# Limit RAG retrieval to top-K=6 chunks
-context = vectordb.similarity_search(query, k=6)
-```
-
-**3. Response Caching** (Dev/Test)
-```python
-# Cache LLM responses by prompt hash
-if ENABLE_CACHE:
-    cache_key = hashlib.sha256(prompt.encode()).hexdigest()
-    if cache_key in redis_cache:
-        return redis_cache[cache_key]
-```
+**3. Response Caching** (Dev/Test) — LLM responses are cached by prompt hash to avoid redundant Bedrock calls during development.
 
 **4. Batch Processing**
 - Process multiple logs in parallel (Airflow dynamic task mapping)
 - Amortize RAG indexing cost across batch
 
-**Monthly Cost Estimate** (1000 logs/month, 2 retries avg):
-```
-1000 logs × 2 attempts × $0.015 = $30/month
-+ S3 storage: ~$5/month
-+ DagsHub MLflow: Free tier
-= Total: ~$35/month
-```
+**Monthly Cost Estimate** (1000 logs/month, 2 retries avg, mixed 8B/70B):
+
+1000 logs × 2 attempts × ~$0.010 avg = **~$20/month** in LLM costs, plus ~$5/month S3 and free-tier DagsHub MLflow — roughly **$25/month total** for self-hosted.
 
 ---
 
@@ -1054,8 +1018,8 @@ graph TB
     SCRAPE --> PROM
     PROM --> DASH
     
-    style PROM fill:#ffe1e1
-    style DASH fill:#e1f5ff
+    style PROM fill:#4a1a1a,color:#fff
+    style DASH fill:#1a3a5c,color:#fff
 ```
 
 ### Key Performance Indicators (KPIs)
@@ -1135,7 +1099,7 @@ cat logs/rca_critic_feedback_<run_id>.txt
 **Solutions**:
 - Improve RAG context: Add more runbooks to `runbook/`
 - Tune chunk_k: Increase from 6 to 10 in `config/settings.yaml`
-- Switch to Sonnet: Use higher-capability model for all agents
+- Force 70B: Set `log_size_threshold: 0` in `config/settings.yaml` to always use Llama 3 70B
 
 #### 4. High Token Costs
 
@@ -1168,358 +1132,6 @@ docker logs -f $(docker ps --format "{{.Names}}" | grep scheduler) | grep InfraM
 
 ---
 
-## Advanced Features
-
-### 1. Dynamic Task Mapping (Parallel Log Processing)
-
-```python
-# dags/dag.py - Process multiple logs in parallel
-from airflow.decorators import task
-
-@task
-def fetch_logs():
-    return ["log1.txt", "log2.txt", "log3.txt"]
-
-@task
-def process_log(log_path: str):
-    # RCA logic here
-    return rca_result
-
-# Dynamic task expansion
-log_paths = fetch_logs()
-results = process_log.expand(log_path=log_paths)
-```
-
-**Benefits**:
-- Process up to `INFRAMIND_MAX_LOGS` in parallel
-- Automatic retry per log (isolated failures)
-- Scales horizontally with Airflow workers
-
-### 2. Incremental RAG Index Updates
-
-```mermaid
-graph LR
-    subgraph "Runbook Change Detection"
-        GIT["Git Hook<br/>runbook/ changes"]
-        HASH["MD5 Hash Check<br/>Detect modifications"]
-    end
-    
-    subgraph "Incremental Update"
-        DIFF["Identify Changed Files<br/>Added/Modified/Deleted"]
-        UPDATE["ChromaDB Upsert<br/>Update only changed chunks"]
-    end
-    
-    subgraph "Full Rebuild (Fallback)"
-        REBUILD["Drop Collection<br/>Re-embed all runbooks"]
-    end
-    
-    GIT --> HASH
-    HASH -->|"Changes Detected"| DIFF
-    HASH -->|"Force Rebuild Flag"| REBUILD
-    DIFF --> UPDATE
-    
-    style UPDATE fill:#e8f5e9
-    style REBUILD fill:#ffe1e1
-```
-
-**Implementation**:
-```python
-# core/vectordb.py
-def update_runbook(self, file_path: str):
-    # Delete old chunks for this file
-    self.collection.delete(where={"source": file_path})
-    
-    # Re-embed and add new chunks
-    chunks = self.text_splitter.split_text(file_path)
-    embeddings = self.embed_model.embed_documents(chunks)
-    self.collection.add(embeddings=embeddings, metadatas=[{"source": file_path}])
-```
-
-### 3. Multi-Tenancy Support
-
-```mermaid
-graph TB
-    subgraph "Tenant Isolation"
-        TENANT_A["Tenant A<br/>S3: bucket-a/raw/<br/>ChromaDB: collection_a"]
-        TENANT_B["Tenant B<br/>S3: bucket-b/raw/<br/>ChromaDB: collection_b"]
-    end
-    
-    subgraph "Shared Airflow"
-        DAG["Parameterized DAG<br/>tenant_id variable"]
-    end
-    
-    subgraph "Isolated Resources"
-        MLFLOW_A["MLflow Experiment<br/>tenant_a_rca"]
-        MLFLOW_B["MLflow Experiment<br/>tenant_b_rca"]
-    end
-    
-    TENANT_A --> DAG
-    TENANT_B --> DAG
-    DAG --> MLFLOW_A
-    DAG --> MLFLOW_B
-    
-    style DAG fill:#fff4e1
-```
-
-**Configuration**:
-```yaml
-# config/tenants.yaml
-tenants:
-  tenant_a:
-    s3_bucket: company-a-logs
-    chroma_collection: runbook_a
-    mlflow_experiment: tenant_a_rca
-  tenant_b:
-    s3_bucket: company-b-logs
-    chroma_collection: runbook_b
-    mlflow_experiment: tenant_b_rca
-```
-
-### 4. Human-in-the-Loop (HITL) Feedback
-
-```mermaid
-sequenceDiagram
-    participant Airflow
-    participant RCA_Engine
-    participant Slack
-    participant SRE
-    participant Feedback_DB
-    
-    Airflow->>RCA_Engine: Generate RCA
-    RCA_Engine->>Slack: Post RCA summary<br/>+ Approve/Reject buttons
-    Slack->>SRE: Notification
-    SRE->>Slack: Click "Approve" or "Reject"
-    Slack->>Feedback_DB: Store feedback<br/>(approved=true/false, comments)
-    Feedback_DB->>RCA_Engine: Fine-tune critic model<br/>(future: RLHF)
-    
-    alt Rejected
-        Feedback_DB->>Airflow: Trigger re-analysis<br/>with SRE comments
-    end
-```
-
-**Implementation**:
-```python
-# dags/workflow.py
-def post_to_slack(rca_result):
-    webhook_url = Variable.get("INFRAMIND_SLACK_WEBHOOK")
-    payload = {
-        "text": f"RCA Generated: {rca_result['summary']}",
-        "attachments": [{
-            "callback_id": rca_result["incident_id"],
-            "actions": [
-                {"name": "approve", "text": "✅ Approve", "type": "button"},
-                {"name": "reject", "text": "❌ Reject", "type": "button"}
-            ]
-        }]
-    }
-    requests.post(webhook_url, json=payload)
-```
-
----
-
-## Production Deployment Considerations
-
-### 1. High Availability Setup
-
-```mermaid
-graph TB
-    subgraph "Load Balancer"
-        ALB["AWS ALB<br/>:443 HTTPS"]
-    end
-    
-    subgraph "Airflow Cluster (ECS Fargate)"
-        WEB1["Webserver 1<br/>2 vCPU, 4GB"]
-        WEB2["Webserver 2<br/>2 vCPU, 4GB"]
-        SCHED1["Scheduler 1<br/>4 vCPU, 8GB"]
-        SCHED2["Scheduler 2<br/>4 vCPU, 8GB"]
-        WORKER1["Worker 1<br/>8 vCPU, 16GB"]
-        WORKER2["Worker 2<br/>8 vCPU, 16GB"]
-    end
-    
-    subgraph "Data Layer"
-        RDS[("RDS PostgreSQL<br/>Multi-AZ<br/>Metadata DB")]
-        EFS[("EFS<br/>Shared DAGs volume")]
-        CHROMA_EFS[("EFS<br/>ChromaDB persistence")]
-    end
-    
-    ALB --> WEB1
-    ALB --> WEB2
-    WEB1 --> RDS
-    WEB2 --> RDS
-    SCHED1 --> RDS
-    SCHED2 --> RDS
-    WORKER1 --> RDS
-    WORKER2 --> RDS
-    
-    SCHED1 --> EFS
-    SCHED2 --> EFS
-    WORKER1 --> EFS
-    WORKER2 --> EFS
-    
-    WORKER1 --> CHROMA_EFS
-    WORKER2 --> CHROMA_EFS
-    
-    style RDS fill:#ffe1e1
-    style EFS fill:#fff4e1
-```
-
-**Infrastructure as Code (Terraform)**:
-```hcl
-# terraform/airflow_cluster.tf
-resource "aws_ecs_service" "airflow_scheduler" {
-  name            = "inframind-scheduler"
-  cluster         = aws_ecs_cluster.airflow.id
-  task_definition = aws_ecs_task_definition.scheduler.arn
-  desired_count   = 2  # HA schedulers
-  
-  deployment_configuration {
-    minimum_healthy_percent = 50
-    maximum_percent         = 200
-  }
-}
-```
-
-### 2. Security Hardening
-
-**Secrets Management**:
-```mermaid
-graph LR
-    subgraph "Secrets Storage"
-        SSM["AWS Systems Manager<br/>Parameter Store"]
-        SECRETS["AWS Secrets Manager<br/>Rotation enabled"]
-    end
-    
-    subgraph "Airflow"
-        CONN["Airflow Connections<br/>Backend: secrets_manager"]
-        VAR["Airflow Variables<br/>Backend: ssm"]
-    end
-    
-    subgraph "Runtime"
-        TASK["Task Execution<br/>IAM role-based access"]
-    end
-    
-    SSM --> VAR
-    SECRETS --> CONN
-    VAR --> TASK
-    CONN --> TASK
-    
-    style SECRETS fill:#ffe1e1
-```
-
-**Airflow Configuration**:
-```ini
-# airflow.cfg
-[secrets]
-backend = airflow.providers.amazon.aws.secrets.secrets_manager.SecretsManagerBackend
-backend_kwargs = {"connections_prefix": "airflow/connections", "variables_prefix": "airflow/variables"}
-```
-
-**Network Isolation**:
-- Airflow in private subnets (no public IPs)
-- VPC endpoints for Bedrock, S3, Secrets Manager
-- Security groups: Allow only ALB → Webserver, Scheduler → Workers
-
-### 3. Disaster Recovery
-
-**Backup Strategy**:
-
-| Component | Backup Method | RPO | RTO |
-|-----------|---------------|-----|-----|
-| **Airflow Metadata** | RDS automated snapshots | 5 min | 15 min |
-| **ChromaDB Index** | EFS daily snapshots | 24 hrs | 1 hr |
-| **RCA Results** | S3 versioning + replication | 0 (real-time) | 0 |
-| **MLflow Artifacts** | S3 cross-region replication | 15 min | 30 min |
-| **DAG Code** | Git repository | 0 (version control) | 5 min |
-
-**Disaster Recovery Runbook**:
-```bash
-#!/bin/bash
-# scripts/disaster_recovery.sh
-
-# 1. Restore RDS from snapshot
-aws rds restore-db-instance-from-db-snapshot \
-  --db-instance-identifier inframind-metadata-dr \
-  --db-snapshot-identifier <latest-snapshot>
-
-# 2. Restore EFS from snapshot
-aws efs restore-from-backup \
-  --file-system-id <efs-id> \
-  --backup-id <latest-backup>
-
-# 3. Redeploy Airflow cluster
-terraform apply -var="environment=dr"
-
-# 4. Verify ChromaDB collection
-curl http://airflow-dr.internal:8080/api/v1/dags/inframind_rca_pipeline/dagRuns \
-  -X POST -u admin:admin
-```
-
----
-
-## Performance Benchmarks
-
-### Latency Breakdown (Single RCA)
-
-```mermaid
-gantt
-    title RCA Pipeline Latency (P50)
-    dateFormat  s
-    axisFormat %S
-    
-    section Data Ingestion
-    S3 Fetch           :0, 2s
-    Log Normalization  :2s, 1s
-    
-    section RAG Retrieval
-    ChromaDB Query     :3s, 0.5s
-    
-    section LLM Inference
-    Investigator       :3.5s, 4s
-    Root Cause         :7.5s, 6s
-    Fix Generator      :13.5s, 5s
-    Formatter          :18.5s, 3s
-    Critic             :21.5s, 2s
-    
-    section Storage
-    S3 Write           :23.5s, 1s
-    MLflow Logging     :24.5s, 0.5s
-```
-
-**Total Latency**: ~25 seconds (P50), ~45 seconds (P95)
-
-### Throughput Metrics
-
-| Configuration | Logs/Hour | Cost/Hour | Notes |
-|---------------|-----------|-----------|-------|
-| **Single Worker** | 120 | $0.50 | Sequential processing |
-| **3 Workers (Parallel)** | 360 | $1.50 | 3x throughput, linear scaling |
-| **10 Workers (Max)** | 1200 | $5.00 | Bedrock rate limit bottleneck |
-
-**Optimization**: Use Bedrock provisioned throughput for > 500 logs/hour.
-
-### Resource Utilization
-
-```mermaid
-graph TB
-    subgraph "Airflow Worker (8 vCPU, 16GB RAM)"
-        CPU["CPU Usage<br/>Avg: 35%<br/>Peak: 60%"]
-        MEM["Memory Usage<br/>Avg: 4GB<br/>Peak: 8GB"]
-        NET["Network I/O<br/>Avg: 5 Mbps<br/>Peak: 20 Mbps"]
-    end
-    
-    subgraph "ChromaDB (4 vCPU, 8GB RAM)"
-        CHROMA_CPU["CPU Usage<br/>Avg: 15%<br/>Peak: 40%"]
-        CHROMA_MEM["Memory Usage<br/>Avg: 2GB<br/>Peak: 4GB"]
-    end
-    
-    style CPU fill:#e8f5e9
-    style CHROMA_CPU fill:#e8f5e9
-```
-
-**Recommendation**: 4 vCPU, 8GB RAM sufficient for < 100 logs/hour.
-
----
-
 ## Roadmap & Future Enhancements
 
 ### Q2 2026
@@ -1533,54 +1145,12 @@ graph TB
 - [ ] **Graph RAG**: Knowledge graph for incident correlation
 
 ### Q4 2026
-- [ ] **LLM Router**: Dynamic model selection (Haiku vs Sonnet) based on complexity
 - [ ] **Causal Inference**: Bayesian networks for root cause ranking
 - [ ] **Explainable AI**: SHAP values for LLM decision transparency
 
 ---
 
-## Contributing
 
-### Development Setup
-
-```bash
-# Clone repo
-git clone https://github.com/nasim-raj-laskar/InfraMind.git
-cd InfraMind
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-pip install -r requirements-dev.txt  # Includes pytest, black, mypy
-
-# Run tests
-pytest tests/ -v --cov=core --cov=agents
-
-# Lint code
-black .
-mypy core/ agents/
-```
-
-### Code Standards
-
-- **Formatting**: Black (line length 100)
-- **Type Hints**: Mandatory for all functions
-- **Docstrings**: Google style
-- **Testing**: Minimum 80% coverage
-
-### Pull Request Process
-
-1. Fork repository
-2. Create feature branch: `git checkout -b feature/your-feature`
-3. Add tests for new functionality
-4. Run full test suite: `pytest tests/`
-5. Update documentation (README, docstrings)
-6. Submit PR with detailed description
-
----
 
 ## Appendix
 
@@ -1618,7 +1188,7 @@ CONSTRAINTS:
 **Run Parameters**:
 ```python
 mlflow.log_params({
-    "model_name": "anthropic.claude-3-haiku-20240307-v1:0",
+    "model_name": "meta.llama3-8b-instruct-v1:0",
     "temperature": 0.1,
     "max_tokens": 2048,
     "chunk_k": 6,
@@ -1700,35 +1270,26 @@ metadata = {
 **Scenario**: 1000 logs/month, 2 attempts average, mixed Haiku/Sonnet
 
 ```
-LLM Inference:
-  - Investigator (Haiku): 1000 × 2 × 6000 tokens × $0.25/1M = $3.00
-  - Root Cause (Sonnet): 1000 × 2 × 8000 tokens × $3.00/1M = $48.00
-  - Fix Generator (Haiku): 1000 × 2 × 5000 tokens × $0.25/1M = $2.50
-  - Formatter (Haiku): 1000 × 2 × 3000 tokens × $0.25/1M = $1.50
-  - Critic (Sonnet): 1000 × 2 × 2000 tokens × $3.00/1M = $12.00
-  Subtotal: $67.00
+LLM Inference (50% 8B / 50% 70B split):
+  - Agents 1-4 via Llama 3 8B (500 logs): 500 × 2 × 6000 tokens × $0.0003/1K = $1.80
+  - Agents 1-4 via Llama 3 70B (500 logs): 500 × 2 × 6000 tokens × $0.00265/1K = $15.90
+  - Critic via Mistral 7B (all logs): 1000 × 2 × 2000 tokens × $0.0002/1K = $0.80
+  Subtotal: ~$18.50
 
-Embeddings:
+Embeddings (Titan Embed v2):
   - RAG queries: 1000 × 2 × 500 tokens × $0.0001/1K = $0.10
-  - Runbook indexing (one-time): 50 docs × 5000 tokens × $0.0001/1K = $0.03
+  - Runbook indexing (one-time): ~$0.03
   Subtotal: $0.13
 
 S3 Storage:
-  - Raw logs (transient): $0
-  - Processed logs (30 days): 1000 × 50KB × $0.023/GB = $1.15
-  - RCA results: 1000 × 5KB × $0.023/GB = $0.12
+  - Processed logs + RCA results: ~$1.27
   Subtotal: $1.27
 
-Airflow (Astro Cloud - optional):
-  - 1 Deployment (Small): $175/month
-  Subtotal: $175.00 (or $0 for self-hosted)
+Airflow (Astro Cloud - optional): $175/month (or $0 for self-hosted)
+MLflow (DagsHub): Free tier — $0
 
-MLflow (DagsHub):
-  - Free tier: $0
-  Subtotal: $0
-
-TOTAL (Self-hosted): ~$68.40/month
-TOTAL (Astro Cloud): ~$243.40/month
+TOTAL (Self-hosted): ~$20/month
+TOTAL (Astro Cloud): ~$195/month
 ```
 
 ### F. Glossary
