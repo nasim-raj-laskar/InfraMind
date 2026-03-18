@@ -1,3 +1,0 @@
-ERROR 500: Database connection refused while connecting to host rds.cluster-inframind.internal
-2024-01-15 10:24:12 [ERROR] ConnectionPoolTimeoutError: too many connections to rds.cluster-inframind.internal
-2024-01-15 10:25:00 [WARN] Threads_connected approaching max_connections limit

@@ -1,0 +1,1 @@
+﻿{"timestamp":"2024-01-15T10:25:00Z","level":"ERROR","service":"coredns","message":"plugin/errors: 2 SERVFAIL rds.cluster-inframind.internal. AAAA"}

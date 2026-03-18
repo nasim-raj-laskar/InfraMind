@@ -1,0 +1,1 @@
+﻿{"timestamp":"2024-01-15T10:23:45Z","level":"ERROR","service":"kubelet","message":"Failed to pull image nginx:latest: RPC error: net/http: TLS handshake timeout"}

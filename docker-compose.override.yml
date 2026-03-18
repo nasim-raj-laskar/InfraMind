@@ -1,10 +1,60 @@
 services:
+  # ── ChromaDB volume mounts + shared prometheus multiproc dir ─
   scheduler:
     volumes:
       - ./chroma_db:/usr/local/airflow/chroma_db
+      - prometheus_multiproc:/tmp/prometheus_multiproc
+    environment:
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc
   dag-processor:
     volumes:
       - ./chroma_db:/usr/local/airflow/chroma_db
+      - prometheus_multiproc:/tmp/prometheus_multiproc
+    environment:
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc
   triggerer:
     volumes:
       - ./chroma_db:/usr/local/airflow/chroma_db
+      - prometheus_multiproc:/tmp/prometheus_multiproc
+    environment:
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc
+
+  # ── Monitoring stack ──────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - airflow
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards
+      - grafana_data:/var/lib/grafana
+    networks:
+      - airflow
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    ports:
+      - "9100:9100"
+    networks:
+      - airflow
+
+volumes:
+  grafana_data:
+  prometheus_multiproc:
+
+networks:
+  airflow:
+    external: true
+    name: infra-mind_60e93c_airflow

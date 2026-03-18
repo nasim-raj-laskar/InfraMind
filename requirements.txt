@@ -13,3 +13,4 @@ mlflow
 dagshub
 deepeval
 chromadb
+prometheus-client

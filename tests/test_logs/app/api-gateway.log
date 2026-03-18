@@ -1,3 +1,0 @@
-{"timestamp":"2024-01-15T10:23:45Z","level":"ERROR","service":"api-gateway","message":"connection refused to rds.cluster-inframind.internal:5432"}
-{"timestamp":"2024-01-15T10:24:00Z","level":"WARN","service":"api-gateway","message":"circuit breaker OPEN - too many upstream failures"}
-{"timestamp":"2024-01-15T10:25:00Z","level":"ERROR","service":"payment-svc","message":"upstream timeout after 30s calling inventory-svc"}

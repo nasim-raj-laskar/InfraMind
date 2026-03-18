@@ -1,0 +1,1 @@
+﻿{"timestamp":"2024-01-15T10:24:00Z","level":"WARN","service":"api-gateway","message":"circuit breaker OPEN - too many upstream failures"}

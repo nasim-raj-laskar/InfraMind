@@ -14,6 +14,7 @@ XCom is used to pass data between tasks.
 from __future__ import annotations
 
 import json
+import time
 import logging
 from datetime import datetime, timedelta
 
@@ -46,16 +47,23 @@ def task_fetch_logs(**context) -> list[str]:
     Scans the entire raw/ prefix — no date partitioning.
     """
     from dags.ingestion import fetch_logs_from_s3
+    from core.metrics import logs_ingested_total, logs_fetch_errors_total
 
     bucket   = Variable.get("INFRAMIND_S3_BUCKET", default_var="inframind-data-hub")
     prefix   = Variable.get("INFRAMIND_S3_PREFIX", default_var="raw/")
     max_logs = int(Variable.get("INFRAMIND_MAX_LOGS", default_var="3"))
 
-    logs, keys = fetch_logs_from_s3(bucket=bucket, prefix=prefix, max_logs=max_logs)
+    try:
+        logs, keys = fetch_logs_from_s3(bucket=bucket, prefix=prefix, max_logs=max_logs)
+        logs_ingested_total.inc(len(logs))
+    except Exception as e:
+        logs_fetch_errors_total.inc()
+        raise
 
     logger.info("Fetched %d logs from S3", len(logs))
     context["ti"].xcom_push(key="raw_logs",  value=logs)
     context["ti"].xcom_push(key="s3_keys",   value=keys)
+    context["ti"].xcom_push(key="dag_start", value=time.time())
     return logs
 
 
@@ -65,20 +73,26 @@ def task_normalize_logs(**context) -> list[dict]:
     Pushes list of normalized log dicts to XCom.
     """
     from core.normalizer import normalize_log
+    from core.metrics import logs_processed_total, log_parse_errors_total
 
     raw_logs = context["ti"].xcom_pull(key="raw_logs", task_ids="fetch_logs")
 
     normalized = []
     for raw in raw_logs:
-        n = normalize_log(raw)
-        normalized.append({
-            "raw":           n.raw,
-            "message":       n.message,
-            "severity":      n.severity,
-            "service":       n.service,
-            "source_format": n.source_format,
-            "timestamp":     n.timestamp,
-        })
+        try:
+            n = normalize_log(raw)
+            normalized.append({
+                "raw":           n.raw,
+                "message":       n.message,
+                "severity":      n.severity,
+                "service":       n.service,
+                "source_format": n.source_format,
+                "timestamp":     n.timestamp,
+            })
+            logs_processed_total.inc()
+        except Exception as e:
+            log_parse_errors_total.inc()
+            logger.warning("Failed to normalize log: %s", e)
 
     logger.info("Normalized %d logs", len(normalized))
     context["ti"].xcom_push(key="normalized_logs", value=normalized)
@@ -115,12 +129,20 @@ def task_run_rca(**context):
     """
     from core.vectordb   import build_vector_db
     from dags.workflow import run_autonomous_workflow
+    from core.metrics  import (
+        rca_success_total, rca_failure_total,
+        rca_generation_latency_seconds, rca_attempts_total, rca_final_score
+    )
 
     normalized_logs = context["ti"].xcom_pull(
         key="normalized_logs", task_ids="normalize_logs"
-    )
+    ) or []
 
-    # Load collection (already embedded in task 3)
+    if not normalized_logs:
+        logger.warning("No normalized logs to process — check fetch_logs and S3 raw/ prefix")
+        context["ti"].xcom_push(key="rca_results", value=[])
+        return []
+
     collection = build_vector_db(force_rebuild=False)
 
     results = []
@@ -129,11 +151,16 @@ def task_run_rca(**context):
         logger.info("Processing log %d/%d | format=%s severity=%s",
                     i + 1, len(normalized_logs),
                     log_dict["source_format"], log_dict["severity"])
+        t0 = time.time()
         try:
             rca, run_id, attempts, score = run_autonomous_workflow(
                 log_text=raw_log,
                 collection=collection,
             )
+            rca_generation_latency_seconds.observe(time.time() - t0)
+            rca_attempts_total.observe(attempts)
+            rca_final_score.observe(score)
+            rca_success_total.inc()
             results.append({
                 "incident_id":   rca.incident_id,
                 "severity":      rca.severity,
@@ -149,6 +176,7 @@ def task_run_rca(**context):
                 "status":        "success",
             })
         except Exception as e:
+            rca_failure_total.inc()
             logger.error("RCA failed for log %d: %s", i + 1, e)
             results.append({
                 "raw_log": raw_log,
@@ -174,9 +202,11 @@ def task_post_results(**context):
     import boto3
     from config.config import S3_BUCKET
     from dags.ingestion import move_to_processed
+    from core.metrics import dag_runs_success_total, dag_runs_failure_total, dag_duration_seconds
 
     results  = context["ti"].xcom_pull(key="rca_results", task_ids="run_rca")
     s3_keys  = context["ti"].xcom_pull(key="s3_keys",     task_ids="fetch_logs")
+    dag_start = context["ti"].xcom_pull(key="dag_start",  task_ids="fetch_logs") or time.time()
     run_ts   = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     key      = f"rca-results/results_{run_ts}.json"
 
@@ -194,6 +224,9 @@ def task_post_results(**context):
     if s3_keys:
         move_to_processed(bucket=S3_BUCKET, keys=s3_keys)
         logger.info("Moved %d logs to processed/", len(s3_keys))
+
+    dag_duration_seconds.observe(time.time() - dag_start)
+    dag_runs_success_total.inc()
 
     # ── Optional: Slack alert for Critical/High severity ──────────────
     slack_webhook = Variable.get("INFRAMIND_SLACK_WEBHOOK", default_var=None)

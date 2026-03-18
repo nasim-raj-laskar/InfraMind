@@ -56,15 +56,13 @@ def fetch_logs_from_s3(
         try:
             response  = s3_client.get_object(Bucket=bucket, Key=key)
             raw_bytes = response["Body"].read()
-            content   = _decode(raw_bytes)
-            for line in content.strip().splitlines():
-                line = line.strip()
-                if line:
-                    logs.append(line)
+            content   = _decode(raw_bytes).strip()
+            if content:
+                logs.append(content)
         except Exception as e:
             logger.warning("Failed to fetch s3://%s/%s - %s", bucket, key, e)
 
-    logger.info("Fetched %d log lines total", len(logs))
+    logger.info("Fetched %d log files total", len(logs))
     return logs, keys
 
 

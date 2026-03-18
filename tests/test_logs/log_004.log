@@ -1,0 +1,1 @@
+﻿E0115 10:26:00.111111   42 kubelet.go:1234] OOMKilling pod: api-service memory limit exceeded
