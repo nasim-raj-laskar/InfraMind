@@ -1,79 +1,71 @@
 # InfraMind
 
-**Production-grade LLMOps platform for autonomous infrastructure root cause analysis (RCA)** — leveraging multi-agent orchestration, retrieval-augmented generation (RAG), and self-correcting LLM workflows on AWS Bedrock. Built for SRE/DevOps teams requiring zero-touch incident triage with full observability, experiment tracking, and quality gates.
+**A LLMOps platform for autonomous infrastructure root cause analysis (RCA)** — leveraging multi-agent orchestration, retrieval-augmented generation (RAG), and self-correcting LLM workflows on AWS Bedrock. Built for SRE/DevOps teams requiring zero-touch incident triage with full observability, experiment tracking, and quality gates.
 
 ---
 
 ## System Architecture
 
 ### High-Level Pipeline Flow
-
 ```mermaid
-graph TB
-    subgraph "Data Ingestion Layer"
-        S3_RAW["S3 raw/<br/>Infrastructure Logs"]
-        FETCH["fetch_logs<br/>(Airflow Task)"]
-        NORM["normalize_logs<br/>Multi-format Parser"]
+
+flowchart TB
+    subgraph INGEST["Data Ingestion · Airflow DAG"]
+        LOGS["S3 raw/"] --> FETCH["fetch_logs"] --> NORM["normalize_logs"] --> NORM_OUT["Normalized JSON"]
     end
-    
-    subgraph "Knowledge Base (RAG)"
-        RUNBOOKS["Markdown Runbooks<br/>SOP Documentation"]
-        EMBED["AWS Bedrock<br/>Titan Embed v2"]
-        CHROMA[("ChromaDB<br/>Vector Store<br/>Persistent Volume")]
+
+    subgraph RAG["RAG Knowledge Base"]
+        RUNBOOKS["Markdown Runbooks"] --> EMBED["Titan Embed v2"] --> CHROMA[("ChromaDB")]
+        CHROMA -->|"cosine search · top-6 · MMR rerank"| CONTEXT["Augmented Context"]
     end
-    
-    subgraph "LLM Orchestration Layer"
-        RCA_ORCH["run_rca<br/>Multi-Agent Workflow"]
-        
-        subgraph "Agent Pipeline"
-            A1["1️⃣ Investigator<br/>Log Analysis"]
-            A2["2️⃣ Root Cause<br/>Hypothesis Generation"]
-            A3["3️⃣ Fix Generator<br/>Remediation Steps"]
-            A4["4️⃣ Formatter<br/>Structured Output"]
-            A5["5️⃣ Critic<br/>Quality Scoring"]
-        end
-        
-        RETRY{"Score ≥ Threshold?<br/>(0.8)"}
-        LOOP["Self-Correction Loop<br/>MAX_RETRIES=2"]
+
+    subgraph MODEL["Dynamic Model Selection"]
+        CHECK{"Log > 2000 chars?"}
+        CHECK -->|No| L8["Llama 3 8B"]
+        CHECK -->|Yes| L70["Llama 3 70B"]
     end
-    
-    subgraph "Observability & Storage"
-        MLFLOW["MLflow Tracking<br/>DagsHub Backend"]
-        DEEPEVAL["DeepEval Metrics<br/>Faithfulness + Relevancy"]
-        S3_OUT["S3 rca-results/<br/>Structured JSON"]
-        POST["post_results<br/>(Airflow Task)"]
+
+    subgraph AGENTS["Multi-Agent Pipeline · AWS Bedrock"]
+        A1["1 Investigator"] --> A2["2 Root Cause <br/> evidence"] --> A3["3 Fix Generator <br/> remediation steps"] --> A4["4 Formatter <br/> structured JSON"]
+        A4 --> CRITIC{"5 Critic <br/> Mistral 7B Score ≥ 0.8?"}
+        CRITIC -->|"No <br/> inject feedback"| A1
+        CRITIC -->|Max retries| FAIL["FAILED"]
     end
-    
-    S3_RAW --> FETCH
-    FETCH --> NORM
-    RUNBOOKS --> EMBED
-    EMBED --> CHROMA
-    
-    NORM --> RCA_ORCH
-    CHROMA -."Semantic Search<br/>Top-K Chunks".-> RCA_ORCH
-    
-    RCA_ORCH --> A1
-    A1 --> A2
-    A2 --> A3
-    A3 --> A4
-    A4 --> A5
-    
-    A5 --> RETRY
-    RETRY -->|"No"| LOOP
-    LOOP --> A1
-    RETRY -->|"Yes"| POST
-    
-    RCA_ORCH -."Telemetry".-> MLFLOW
-    RCA_ORCH -."Evaluation".-> DEEPEVAL
-    POST --> S3_OUT
-    
-    style A1 fill:#1a3a5c,color:#fff
-    style A2 fill:#1a3a5c,color:#fff
-    style A3 fill:#1a3a5c,color:#fff
-    style A4 fill:#1a3a5c,color:#fff
-    style A5 fill:#4a1a5c,color:#fff
-    style CHROMA fill:#4a3a1a,color:#fff
-    style MLFLOW fill:#1a4a2e,color:#fff
+
+    subgraph OBS["Observability & Output"]
+        MLFLOW["MLflow · DagsHub <br/> params · metrics · artifacts"]
+        DEEPEVAL["DeepEval <br/> faithfulness · relevancy · recall"]
+        GRAFANA["Grafana <br/> throughput · cost · latency"]
+        S3_OUT["S3 rca-results/ <br/>structured JSON"]
+        SLACK["Slack <br/> incident alert"]
+    end
+
+    NORM_OUT --> CHECK
+    NORM_OUT -->|query embedding| CHROMA
+    L8 & L70 -->|LLM inference| A1
+    CONTEXT -->|injected into prompts| A1
+    CRITIC -->|pass| S3_OUT
+    CRITIC -->|pass| SLACK
+    AGENTS -->|telemetry| MLFLOW
+    AGENTS -->|eval| DEEPEVAL
+    DEEPEVAL --> MLFLOW
+    MLFLOW --> GRAFANA
+
+    classDef teal fill:#0F6E56,color:#E1F5EE,stroke:#085041
+    classDef blue fill:#185FA5,color:#E6F1FB,stroke:#0C447C
+    classDef purple fill:#534AB7,color:#EEEDFE,stroke:#3C3489
+    classDef coral fill:#993C1D,color:#FAECE7,stroke:#712B13
+    classDef amber fill:#854F0B,color:#FAEEDA,stroke:#633806
+    classDef green fill:#3B6D11,color:#EAF3DE,stroke:#27500A
+    classDef red fill:#A32D2D,color:#FCEBEB,stroke:#791F1F
+
+    class LOGS,FETCH,NORM,NORM_OUT teal
+    class RUNBOOKS,EMBED,CHROMA,CONTEXT blue
+    class CHECK,L8,L70 amber
+    class A1,A2,A3,A4 purple
+    class CRITIC coral
+    class FAIL red
+    class MLFLOW,DEEPEVAL,GRAFANA,S3_OUT,SLACK green
 ```
 
 ### Multi-Agent Workflow with Self-Correction
