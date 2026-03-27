@@ -1,25 +1,28 @@
 services:
-  # ── ChromaDB volume mounts + shared prometheus multiproc dir ─
+  # ChromaDB volume mounts for Airflow components
   scheduler:
     volumes:
       - ./chroma_db:/usr/local/airflow/chroma_db
-      - prometheus_multiproc:/tmp/prometheus_multiproc
+    tmpfs:
+      - /tmp/prometheus_multiproc
     environment:
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc
   dag-processor:
     volumes:
       - ./chroma_db:/usr/local/airflow/chroma_db
-      - prometheus_multiproc:/tmp/prometheus_multiproc
+    tmpfs:
+      - /tmp/prometheus_multiproc
     environment:
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc
   triggerer:
     volumes:
       - ./chroma_db:/usr/local/airflow/chroma_db
-      - prometheus_multiproc:/tmp/prometheus_multiproc
+    tmpfs:
+      - /tmp/prometheus_multiproc
     environment:
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc
 
-  # ── Monitoring stack ──────────────────────────────────────────
+  # Monitoring stack 
   prometheus:
     image: prom/prometheus:latest
     ports:
@@ -52,7 +55,6 @@ services:
 
 volumes:
   grafana_data:
-  prometheus_multiproc:
 
 networks:
   airflow:

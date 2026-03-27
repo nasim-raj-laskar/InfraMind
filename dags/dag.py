@@ -226,7 +226,8 @@ def task_post_results(**context):
         logger.info("Moved %d logs to processed/", len(s3_keys))
 
     dag_duration_seconds.observe(time.time() - dag_start)
-    dag_runs_success_total.inc()
+    if context["ti"].try_number == 1:
+        dag_runs_success_total.inc()
 
     # ── Optional: Slack alert for Critical/High severity ──────────────
     slack_webhook = Variable.get("INFRAMIND_SLACK_WEBHOOK", default_var=None)

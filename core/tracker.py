@@ -25,11 +25,20 @@ def setup_mlflow():
     logger.info("MLflow tracking URI: %s", MLFLOW_URI)
 
 
+# Accumulators keyed by active run_id so concurrent runs don't bleed into each other
+_run_totals: dict = {}
+
+
 def log_usage(usage: dict):
-    """Log token counts and cost from a single LLM call."""
-    mlflow.log_metric("tokens_in",  usage.get("tokens_in", 0))
-    mlflow.log_metric("tokens_out", usage.get("tokens_out", 0))
-    mlflow.log_metric("cost_usd",   usage.get("cost_usd", 0.0))
+    """Accumulate token counts and cost — flushed to MLflow in log_final."""
+    run = mlflow.active_run()
+    if not run:
+        return
+    rid = run.info.run_id
+    t = _run_totals.setdefault(rid, {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0})
+    t["tokens_in"]  += usage.get("tokens_in",  0)
+    t["tokens_out"] += usage.get("tokens_out", 0)
+    t["cost_usd"]   += usage.get("cost_usd",   0.0)
 
 
 def log_attempt(attempt: int, rca: RCAOutput, critique: str,
@@ -66,6 +75,17 @@ def log_final(rca: RCAOutput, critique: str, context: str,
     mlflow.log_param("retrieved_context_length", len(context))
     mlflow.log_dict(rca.model_dump(),          "final_rca_output.json")
     mlflow.log_text(critique,                  "final_senior_sre_review.txt")
+
+    run = mlflow.active_run()
+    if run:
+        rid = run.info.run_id
+        totals = _run_totals.pop(rid, {})
+        if totals:
+            mlflow.log_metrics({
+                "total_tokens_in":  totals["tokens_in"],
+                "total_tokens_out": totals["tokens_out"],
+                "total_cost_usd":   totals["cost_usd"],
+            })
 
 
 def run_name() -> str:

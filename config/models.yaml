@@ -1,6 +1,6 @@
 bedrock:
   region: ap-south-1
-
+  # pricing unit: USD per 1,000 tokens
   llm:
     small:
       id: meta.llama3-8b-instruct-v1:0
@@ -20,6 +20,9 @@ bedrock:
       id: mistral.mistral-7b-instruct-v0:2
       label: Mistral-7B
       max_tokens: 512
+      pricing:
+        input: 0.0002
+        output: 0.0002
 
   embeddings:
     id: amazon.titan-embed-text-v2:0

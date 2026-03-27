@@ -63,8 +63,8 @@ def call_llama(prompt: str, model_id: str, max_tokens: int = 512) -> tuple[str, 
         "model_id":   model_id,
     }
     usage["cost_usd"] = (
-        usage["tokens_in"]  * PRICING.get(model_id, {}).get("input", 0) +
-        usage["tokens_out"] * PRICING.get(model_id, {}).get("output", 0)
+        usage["tokens_in"]  / 1000 * PRICING.get(model_id, {}).get("input", 0) +
+        usage["tokens_out"] / 1000 * PRICING.get(model_id, {}).get("output", 0)
     )
     llm_tokens_in_total.labels(model_id=model_id).inc(usage["tokens_in"])
     llm_tokens_out_total.labels(model_id=model_id).inc(usage["tokens_out"])
@@ -106,7 +106,14 @@ def call_mistral(prompt: str, max_tokens: int = 512) -> str:
 
     result = json.loads(response["body"].read())
     text   = result.get("outputs", [{}])[0].get("text", "")
-    tokens_out = len(text.split())
+    tokens_in  = result.get("prompt_token_count", len(mistral_prompt.split()))
+    tokens_out = result.get("generation_token_count", len(text.split()))
+    cost = (
+        tokens_in  / 1000 * PRICING.get(MODEL_CRITIC_ID, {}).get("input",  0) +
+        tokens_out / 1000 * PRICING.get(MODEL_CRITIC_ID, {}).get("output", 0)
+    )
+    llm_tokens_in_total.labels(model_id=MODEL_CRITIC_ID).inc(tokens_in)
     llm_tokens_out_total.labels(model_id=MODEL_CRITIC_ID).inc(tokens_out)
-    logger.debug("Mistral call | tokens_out=%d", tokens_out)
+    llm_cost_usd_total.labels(model_id=MODEL_CRITIC_ID).inc(cost)
+    logger.debug("Mistral call | tokens_in=%d tokens_out=%d cost=$%.5f", tokens_in, tokens_out, cost)
     return text

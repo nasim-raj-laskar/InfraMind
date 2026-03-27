@@ -61,8 +61,9 @@ MODEL_EMBED_ID      = _models["bedrock"]["embeddings"]["id"]
 EMBED_MAX_INPUT     = _models["bedrock"]["embeddings"]["max_input"]
 
 PRICING = {
-    MODEL_SMALL_ID: _models["bedrock"]["llm"]["small"]["pricing"],
-    MODEL_LARGE_ID: _models["bedrock"]["llm"]["large"]["pricing"],
+    MODEL_SMALL_ID:  _models["bedrock"]["llm"]["small"]["pricing"],
+    MODEL_LARGE_ID:  _models["bedrock"]["llm"]["large"]["pricing"],
+    MODEL_CRITIC_ID: _models["bedrock"]["llm"]["critic"]["pricing"],
 }
 
 # AWS credentials

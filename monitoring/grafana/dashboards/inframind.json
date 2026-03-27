@@ -71,7 +71,9 @@
         "orientation": "auto",
         "percentChangeColorMode": "standard",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -130,7 +132,9 @@
         "orientation": "auto",
         "percentChangeColorMode": "standard",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -189,7 +193,9 @@
         "orientation": "auto",
         "percentChangeColorMode": "standard",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -251,7 +257,9 @@
         "orientation": "auto",
         "percentChangeColorMode": "standard",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -499,7 +507,9 @@
         "orientation": "auto",
         "percentChangeColorMode": "standard",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -571,7 +581,9 @@
         "orientation": "auto",
         "percentChangeColorMode": "standard",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -633,7 +645,9 @@
         "orientation": "auto",
         "percentChangeColorMode": "standard",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -683,7 +697,9 @@
       },
       "id": 14,
       "options": {
-        "displayLabels": ["percent"],
+        "displayLabels": [
+          "percent"
+        ],
         "legend": {
           "displayMode": "list",
           "placement": "bottom",
@@ -691,7 +707,9 @@
         },
         "pieType": "donut",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -856,7 +874,9 @@
         "orientation": "auto",
         "percentChangeColorMode": "standard",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -918,7 +938,9 @@
         "orientation": "auto",
         "percentChangeColorMode": "standard",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -937,11 +959,6 @@
           "expr": "histogram_quantile(0.95, rate(rca_generation_latency_seconds_bucket[10m]))",
           "legendFormat": "p95",
           "refId": "B"
-        },
-        {
-          "expr": "histogram_quantile(0.99, rate(rca_generation_latency_seconds_bucket[10m]))",
-          "legendFormat": "p99",
-          "refId": "C"
         }
       ],
       "title": "RCA Generation Latency (p50 / p95 / p99)",
@@ -1285,7 +1302,9 @@
         "orientation": "auto",
         "percentChangeColorMode": "standard",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -1297,7 +1316,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "llm_cost_usd_total{instance=~\".*scheduler.*\"}",
+          "expr": "sum(llm_cost_usd_total{instance=~\".*scheduler.*\"})",
           "legendFormat": "Cost",
           "range": true,
           "refId": "A"
@@ -1701,7 +1720,9 @@
   "preload": false,
   "refresh": "auto",
   "schemaVersion": 42,
-  "tags": ["inframind"],
+  "tags": [
+    "inframind"
+  ],
   "templating": {
     "list": []
   },
@@ -1713,6 +1734,6 @@
   "timezone": "browser",
   "title": "InfraMind — Full Monitoring",
   "uid": "inframind-full",
-  "version": 2,
+  "version": 4,
   "weekStart": ""
 }
