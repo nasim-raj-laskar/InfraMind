@@ -248,7 +248,8 @@ InfraMind/
 ├── Dockerfile          # Astro Runtime + PYTHONPATH
 ├── docker-compose.override.yml  # ChromaDB volume persistence
 ├── requirements.txt
-└── restart.ps1         # Windows clean restart script
+├── restart.ps1         # Windows clean restart script
+└── restart.sh          # macOS/Linux clean restart script
 ```
 
 ---
@@ -365,28 +366,14 @@ The IAM policy should grant `bedrock:InvokeModel` on the four model ARNs above (
 .\restart.ps1
 ```
 
-This script:
-1. Stops existing Airflow containers
-2. Prunes Docker volumes (clean state)
-3. Starts Astro dev environment
-4. Configures Airflow pools and variables
-5. Opens browser to `http://localhost:8080`
-
 **macOS/Linux**:
 
 ```bash
-# Start Airflow
-astro dev start --no-browser --settings-file /dev/null
-
-# Configure pools and variables
-SCHEDULER=$(docker ps --format "{{.Names}}" | grep scheduler)
-
-docker exec $SCHEDULER airflow pools set single_thread_pool 1 "ChromaDB write lock"
-docker exec $SCHEDULER airflow variables set INFRAMIND_S3_BUCKET your-bucket-name
-docker exec $SCHEDULER airflow variables set INFRAMIND_S3_PREFIX raw/
-docker exec $SCHEDULER airflow variables set INFRAMIND_MAX_LOGS 3
-docker exec $SCHEDULER airflow variables set INFRAMIND_FORCE_REBUILD false
+chmod +x restart.sh
+./restart.sh
 ```
+
+Both scripts: stop existing containers, start Astro, wait for the scheduler to be ready, then apply pools and Airflow variables automatically.
 
 ### 4. Verify Deployment
 
