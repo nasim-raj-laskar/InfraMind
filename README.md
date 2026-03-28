@@ -296,28 +296,7 @@ graph TB
 
 ### Airflow DAG Task Dependencies
 
-```mermaid
-graph LR
-    START(["DAG Trigger<br/>Manual / Schedule"]) --> FETCH
-    
-    FETCH["fetch_logs<br/>S3 ListObjects<br/>Filter: raw/*.log"]
-    NORM["normalize_logs<br/>Multi-format parser<br/>JSON/syslog/K8s"]
-    RCA["run_rca<br/>Multi-agent workflow<br/>Pool: single_thread"]
-    POST["post_results<br/>S3 PutObject<br/>Move raw → processed"]
-    NOTIFY["send_notification<br/>Slack webhook<br/>(Optional)"]
-    
-    FETCH --> NORM
-    NORM --> RCA
-    RCA --> POST
-    POST --> NOTIFY
-    NOTIFY --> END(["DAG Complete"])
-    
-    RCA -."XCom: rca_results".-> POST
-    FETCH -."XCom: log_paths".-> NORM
-    
-    style RCA fill:#1a3a5c,color:#fff
-    style POST fill:#1a4a2e,color:#fff
-```
+![](assets/dag.png)
 
 **Task Pool Configuration**
 - `single_thread_pool` (slots=1): Serializes ChromaDB writes to prevent race conditions

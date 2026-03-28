@@ -58,5 +58,4 @@ volumes:
 
 networks:
   airflow:
-    external: true
-    name: infra-mind_60e93c_airflow
+    name: inframind_airflow

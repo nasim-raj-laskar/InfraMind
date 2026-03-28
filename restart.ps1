@@ -1,35 +1,10 @@
-# restart.ps1 - clean restart for InfraMind Astro project
-# Usage: .\restart.ps1
-
 Write-Host "Stopping all InfraMind containers..." -ForegroundColor Yellow
-docker ps -a --format "{{.Names}}" | Where-Object { $_ -like "infra-mind_*" } | ForEach-Object {
+docker ps -a --format "{{.Names}}" | Where-Object { $_ -like "inframind_*" } | ForEach-Object {
     docker rm -f $_ | Out-Null
-}
-
-# Detect network name from any existing infra-mind network (name is stable per project folder)
-$network = docker network ls --format "{{.Name}}" | Where-Object { $_ -like "infra-mind_*_airflow" } | Select-Object -First 1
-
-if ($network) {
-    Write-Host "Patching network name: $network" -ForegroundColor Cyan
-    (Get-Content docker-compose.override.yml) `
-        -replace "name: infra-mind_.*_airflow", "name: $network" |
-        Set-Content docker-compose.override.yml
-} else {
-    Write-Host "No existing network found - will detect after first start" -ForegroundColor Yellow
 }
 
 Write-Host "Starting Astro..." -ForegroundColor Yellow
 astro dev start --no-browser --settings-file /dev/null
-
-# If network wasn't found before (first ever run), detect and patch now for next restart
-if (-not $network) {
-    $network = docker network ls --format "{{.Name}}" | Where-Object { $_ -like "infra-mind_*_airflow" } | Select-Object -First 1
-    Write-Host "First run - saving network name: $network" -ForegroundColor Cyan
-    (Get-Content docker-compose.override.yml) `
-        -replace "name: infra-mind_.*_airflow", "name: $network" |
-        Set-Content docker-compose.override.yml
-    Write-Host "Run .\restart.ps1 again to apply monitoring on the correct network." -ForegroundColor Yellow
-}
 
 Write-Host "Waiting for scheduler to be ready..." -ForegroundColor Yellow
 $scheduler = $null
