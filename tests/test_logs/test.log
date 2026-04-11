@@ -1,0 +1,15 @@
+{
+  "rca_output": {
+    "incident_id": "test-1113",
+    "severity": "LOW",
+    "log_source": "s3://inframind-data-hub/raw/test.log",
+    "mlflow_run_id": "run_002",
+    "summary": "Test incident",
+    "root_cause": "Something bad happened",
+    "immediate_fix": "restart service"
+  },
+  "ai_critic": {
+    "score": 0.85,
+    "reasoning": "Looks reasonable"
+  }
+}
