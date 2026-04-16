@@ -161,22 +161,32 @@ def task_run_rca(**context):
             rca_attempts_total.observe(attempts)
             rca_final_score.observe(score)
             rca_success_total.inc()
+
+            import re
+            critic_score = int(score * 10)
+            note_match       = re.search(r"NOTE:\s*(.+)", critic_review, re.IGNORECASE)
+            critic_reasoning = note_match.group(1).strip() if note_match else re.sub(r"SCORE:\s*\[?\d+\]?\s*\|?\s*", "", critic_review).strip()
+
             results.append({
-                "incident_id":   rca.incident_id,
-                "severity":      rca.severity,
-                "summary":       rca.summary,
-                "root_cause":    rca.root_cause,
-                "immediate_fix": rca.immediate_fix,
-                "confidence":    rca.confidence_score,
-                "model_used":    rca.model_used,
-                "mlflow_run_id": run_id,
-                "attempts":      attempts,
-                "critic_review": critic_review,
-                "log_format":    norm.source_format,
-                "log_severity":  norm.severity,
-                "log_service":   norm.service or "unknown",
-                "raw_log":       raw_log,
-                "status":        "success",
+                "rca_output": {
+                    "incident_id":   rca.incident_id,
+                    "summary":       rca.summary,
+                    "root_cause":    rca.root_cause,
+                    "immediate_fix": rca.immediate_fix,
+                    "severity":      rca.severity,
+                    "confidence":    rca.confidence_score,
+                    "attempts":      attempts,
+                    "raw_log":       raw_log,
+                    "log_service":   norm.service or "unknown",
+                    "log_severity":  norm.severity,
+                    "log_format":    norm.source_format,
+                    "model_used":    rca.model_used,
+                    "mlflow_run_id": run_id,
+                },
+                "ai_critic": {
+                    "score":     critic_score,
+                    "reasoning": critic_reasoning,
+                },
             })
         except Exception as e:
             rca_failure_total.inc()
@@ -189,8 +199,8 @@ def task_run_rca(**context):
 
     logger.info(
         "RCA complete | success=%d failed=%d",
-        sum(1 for r in results if r["status"] == "success"),
-        sum(1 for r in results if r["status"] == "failed"),
+        sum(1 for r in results if "rca_output" in r),
+        sum(1 for r in results if "error" in r),
     )
     context["ti"].xcom_push(key="rca_results", value=results)
     return results
@@ -215,9 +225,9 @@ def task_post_results(**context):
     s3 = boto3.client("s3")
     key = None
     for result in results:
-        incident_id = result.get("incident_id", run_ts)
-        service     = result.get("log_service", "unknown").replace(" ", "-")
-        severity    = result.get("severity", "unknown")
+        incident_id = result.get("rca_output", {}).get("incident_id", run_ts)
+        service     = result.get("rca_output", {}).get("log_service", "unknown").replace(" ", "-")
+        severity    = result.get("rca_output", {}).get("severity", "unknown")
         short_id    = incident_id[:8]
         key = f"rca-results/rca_{service}_{severity}_{run_ts}_{short_id}.json"
         s3.put_object(
@@ -242,14 +252,13 @@ def task_post_results(**context):
     if slack_webhook:
         import urllib.request
         critical = [r for r in results
-                    if r.get("status") == "success"
-                    and r.get("severity") in ("Critical", "High")]
+                    if r.get("rca_output", {}).get("severity") in ("Critical", "High")]
         if critical:
             msg = {
                 "text": f":rotating_light: *InfraMind* — {len(critical)} "
                         f"Critical/High incident(s) detected\n" +
                         "\n".join(
-                            f"• `{r['incident_id'][:8]}` [{r['severity']}] {r['summary']}"
+                            f"• `{r['rca_output']['incident_id'][:8]}` [{r['rca_output']['severity']}] {r['rca_output']['summary']}"
                             for r in critical
                         )
             }
