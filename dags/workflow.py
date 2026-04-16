@@ -144,4 +144,4 @@ def run_autonomous_workflow(
         if attempts > max_retries + 1:
             logger.warning("Max retries reached — returning best effort RCA")
 
-        return final_rca, run_id, attempts, final_score
+        return final_rca, run_id, attempts, final_score, critique_text, normalized

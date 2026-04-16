@@ -153,7 +153,7 @@ def task_run_rca(**context):
                     log_dict["source_format"], log_dict["severity"])
         t0 = time.time()
         try:
-            rca, run_id, attempts, score = run_autonomous_workflow(
+            rca, run_id, attempts, score, critic_review, norm = run_autonomous_workflow(
                 log_text=raw_log,
                 collection=collection,
             )
@@ -171,7 +171,10 @@ def task_run_rca(**context):
                 "model_used":    rca.model_used,
                 "mlflow_run_id": run_id,
                 "attempts":      attempts,
-                "final_score":   score,
+                "critic_review": critic_review,
+                "log_format":    norm.source_format,
+                "log_severity":  norm.severity,
+                "log_service":   norm.service or "unknown",
                 "raw_log":       raw_log,
                 "status":        "success",
             })
