@@ -207,21 +207,26 @@ def task_post_results(**context):
     from dags.ingestion import move_to_processed
     from core.metrics import dag_runs_success_total, dag_runs_failure_total, dag_duration_seconds
 
-    results  = context["ti"].xcom_pull(key="rca_results", task_ids="run_rca")
-    s3_keys  = context["ti"].xcom_pull(key="s3_keys",     task_ids="fetch_logs")
-    dag_start = context["ti"].xcom_pull(key="dag_start",  task_ids="fetch_logs") or time.time()
-    run_ts   = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    key      = f"rca-results/results_{run_ts}.json"
+    results   = context["ti"].xcom_pull(key="rca_results", task_ids="run_rca")
+    s3_keys   = context["ti"].xcom_pull(key="s3_keys",     task_ids="fetch_logs")
+    dag_start = context["ti"].xcom_pull(key="dag_start",   task_ids="fetch_logs") or time.time()
+    run_ts    = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 
     s3 = boto3.client("s3")
-
-    s3.put_object(
-        Bucket=S3_BUCKET,
-        Key=key,
-        Body=json.dumps(results, indent=2),
-        ContentType="application/json",
-    )
-    logger.info("Results saved to s3://%s/%s", S3_BUCKET, key)
+    key = None
+    for result in results:
+        incident_id = result.get("incident_id", run_ts)
+        service     = result.get("log_service", "unknown").replace(" ", "-")
+        severity    = result.get("severity", "unknown")
+        short_id    = incident_id[:8]
+        key = f"rca-results/rca_{service}_{severity}_{run_ts}_{short_id}.json"
+        s3.put_object(
+            Bucket=S3_BUCKET,
+            Key=key,
+            Body=json.dumps(result, indent=2),
+            ContentType="application/json",
+        )
+        logger.info("Result saved to s3://%s/%s", S3_BUCKET, key)
 
     # Move processed logs raw/ → processed/
     if s3_keys:
