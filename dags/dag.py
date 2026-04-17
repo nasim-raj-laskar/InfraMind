@@ -24,7 +24,7 @@ from airflow.models import Variable                                           #t
 
 logger = logging.getLogger("inframind.dag")
 
-# ── Default DAG args ──────────────────────────────────────────
+# Default DAG args 
 default_args = {
     "owner":            "inframind",
     "depends_on_past":  False,
@@ -35,11 +35,8 @@ default_args = {
 }
 
 
-# ════════════════════════════════════════════════════════════════
 # TASK FUNCTIONS
-# Each function is fully self-contained — imports inside function
-# so Airflow workers only load what they need.
-# ════════════════════════════════════════════════════════════════
+
 
 def task_fetch_logs(**context) -> list[str]:
     """
@@ -206,76 +203,36 @@ def task_run_rca(**context):
     return results
 
 
-def task_post_results(**context):
+def task_review_sent(**context):
     """
-    Task 5 — Push results to downstream systems.
-    Currently: saves to S3 as JSON.
-    Extend here to add Slack alerts, PagerDuty, webhooks, etc.
+    Task 5 — Fire-and-forget: hand each RCA result off to Step Functions,
+    then move processed S3 logs raw/ → processed/.
     """
-    import boto3
+    from core.sfn_client import trigger_step_function
     from config.config import S3_BUCKET
     from dags.ingestion import move_to_processed
-    from core.metrics import dag_runs_success_total, dag_runs_failure_total, dag_duration_seconds
 
-    results   = context["ti"].xcom_pull(key="rca_results", task_ids="run_rca")
-    s3_keys   = context["ti"].xcom_pull(key="s3_keys",     task_ids="fetch_logs")
-    dag_start = context["ti"].xcom_pull(key="dag_start",   task_ids="fetch_logs") or time.time()
-    run_ts    = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    results  = context["ti"].xcom_pull(key="rca_results", task_ids="run_rca") or []
+    s3_keys  = context["ti"].xcom_pull(key="s3_keys",     task_ids="fetch_logs") or []
 
-    s3 = boto3.client("s3")
-    key = None
     for result in results:
-        incident_id = result.get("rca_output", {}).get("incident_id", run_ts)
-        service     = result.get("rca_output", {}).get("log_service", "unknown").replace(" ", "-")
-        severity    = result.get("rca_output", {}).get("severity", "unknown")
-        short_id    = incident_id[:8]
-        key = f"rca-results/rca_{service}_{severity}_{run_ts}_{short_id}.json"
-        s3.put_object(
-            Bucket=S3_BUCKET,
-            Key=key,
-            Body=json.dumps(result, indent=2),
-            ContentType="application/json",
+        if "rca_output" not in result:
+            logger.warning("Skipping failed RCA entry: %s", result.get("error"))
+            continue
+        arn = trigger_step_function(
+            rca_output=result["rca_output"],
+            ai_critic=result["ai_critic"],
         )
-        logger.info("Result saved to s3://%s/%s", S3_BUCKET, key)
+        logger.info("SF execution started | arn=%s", arn)
 
-    # Move processed logs raw/ → processed/
     if s3_keys:
         move_to_processed(bucket=S3_BUCKET, keys=s3_keys)
         logger.info("Moved %d logs to processed/", len(s3_keys))
 
-    dag_duration_seconds.observe(time.time() - dag_start)
-    if context["ti"].try_number == 1:
-        dag_runs_success_total.inc()
-
-    # ── Optional: Slack alert for Critical/High severity ──────────────
-    slack_webhook = Variable.get("INFRAMIND_SLACK_WEBHOOK", default_var=None)
-    if slack_webhook:
-        import urllib.request
-        critical = [r for r in results
-                    if r.get("rca_output", {}).get("severity") in ("Critical", "High")]
-        if critical:
-            msg = {
-                "text": f":rotating_light: *InfraMind* — {len(critical)} "
-                        f"Critical/High incident(s) detected\n" +
-                        "\n".join(
-                            f"• `{r['rca_output']['incident_id'][:8]}` [{r['rca_output']['severity']}] {r['rca_output']['summary']}"
-                            for r in critical
-                        )
-            }
-            req = urllib.request.Request(
-                slack_webhook,
-                data=json.dumps(msg).encode(),
-                headers={"Content-Type": "application/json"},
-            )
-            urllib.request.urlopen(req)
-            logger.info("Slack alert sent for %d critical incidents", len(critical))
-
-    return key
+    logger.info("Triggered %d Step Functions execution(s)", sum(1 for r in results if "rca_output" in r))
 
 
-# ════════════════════════════════════════════════════════════════
 # DAG DEFINITION
-# ════════════════════════════════════════════════════════════════
 with DAG(
     dag_id="inframind_rca_pipeline",
     default_args=default_args,
@@ -307,12 +264,10 @@ with DAG(
         execution_timeout=timedelta(minutes=30),  # Prevent indefinite hangs
     )
 
-    post_results = PythonOperator(
-        task_id="post_results",
-        python_callable=task_post_results,
+    review_sent = PythonOperator(
+        task_id="review_sent",
+        python_callable=task_review_sent,
     )
 
     # ── Task dependencies ─────────────────────────────────────────────
-    # fetch_logs and embed_runbooks run in parallel (independent)
-    # run_rca waits for both before starting
-    [fetch_logs, embed_runbooks] >> normalize_logs >> run_rca >> post_results
+    [fetch_logs, embed_runbooks] >> normalize_logs >> run_rca >> review_sent
