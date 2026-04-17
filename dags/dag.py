@@ -269,5 +269,5 @@ with DAG(
         python_callable=task_review_sent,
     )
 
-    # ── Task dependencies ─────────────────────────────────────────────
+    #  Task dependencies 
     [fetch_logs, embed_runbooks] >> normalize_logs >> run_rca >> review_sent
