@@ -1,0 +1,54 @@
+{
+  "Comment": "InfraMind HITL review workflow",
+  "StartAt": "StoreForReview",
+  "States": {
+    "StoreForReview": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+      "Parameters": {
+        "FunctionName": "InfraMind-StoreForReview",
+        "Payload": {
+          "task_token.$": "$$.Task.Token",
+          "rca_output.$": "$.rca_output",
+          "ai_critic.$": "$.ai_critic"
+        }
+      },
+      "HeartbeatSeconds": 259200,
+      "Catch": [
+        {
+          "ErrorEquals": ["HumanRejection"],
+          "Next": "OnReject",
+          "ResultPath": "$.rejection"
+        },
+        {
+          "ErrorEquals": ["States.HeartbeatTimeout"],
+          "Next": "EscalateTimeout"
+        }
+      ],
+      "Next": "OnApprove"
+    },
+    "OnApprove": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:<region>:<account-id>:function:InfraMind-OnApprove",
+      "End": true
+    },
+    "OnReject": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:<region>:<account-id>:function:InfraMind-OnReject",
+      "ResultPath": "$.rejectionResult",
+      "End": true
+    },
+    "EscalateTimeout": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:<region>:<account-id>:function:InfraMind-OnReject",
+      "Parameters": {
+        "incident_id.$": "$.rca_output.incident_id",
+        "human_feedback": {
+          "feedback_type": "timeout",
+          "reason": "No SRE review within 72 hours"
+        }
+      },
+      "End": true
+    }
+  }
+}
