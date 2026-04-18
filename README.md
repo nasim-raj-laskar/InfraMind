@@ -1,8 +1,18 @@
 # InfraMind
+![Python](https://img.shields.io/badge/Python-3.11-blue)
+![AWS Stack](https://img.shields.io/badge/AWS%20Stack-Bedrock%20%7C%20Lambda%20%7C%20Step%20Functions%20%7C%20DynamoDB%20%7C%20API%20Gateway%20%7C%20S3-orange)
+![RAG](https://img.shields.io/badge/RAG-Enabled-blueviolet)
+![Multi-Agent](https://img.shields.io/badge/Multi--Agent-System-purple)
+![HITL](https://img.shields.io/badge/Human--in--the--Loop-Enabled-red)
+![MLOps](https://img.shields.io/badge/MLOps-MLflow%20%7C%20DeepEval-blue)
+![Grafana](https://img.shields.io/badge/Grafana-Monitoring-F46800?logo=grafana&logoColor=white)
+![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-E6522C?logo=prometheus&logoColor=white)
+![License](https://img.shields.io/badge/License-Apache-yellow)
+![](assets/high-arch.png)
 
 **A production-grade LLMOps platform for autonomous infrastructure root cause analysis (RCA)** — leveraging multi-agent orchestration, retrieval-augmented generation (RAG), self-correcting LLM workflows on AWS Bedrock, and a fully serverless human-in-the-loop (HITL) review layer. Built for SRE/DevOps teams requiring zero-touch incident triage with full observability, experiment tracking, and quality gates.
 
-![](assets/high-arch.png)
+
 ---
 
 ## System Architecture
