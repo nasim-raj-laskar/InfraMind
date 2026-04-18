@@ -27,18 +27,18 @@ flowchart TB
 
     subgraph AGENTS["Multi-Agent Pipeline · AWS Bedrock"]
         A1["1 Investigator"] --> A2["2 Root Cause"] --> A3["3 Fix Generator"] --> A4["4 Formatter"]
-        A4 --> CRITIC{"5 Critic · Mistral 7B\nScore ≥ 0.8?"}
+        A4 --> CRITIC{"5 Critic · Mistral 7B<br/>Score ≥ 0.8?"}
         CRITIC -->|"No · inject feedback"| A1
         CRITIC -->|Max retries| FAIL["FAILED"]
     end
 
     subgraph HITL["Human-in-the-Loop · AWS Step Functions"]
-        SF["trigger_sf_review\nfire and forget"]
-        STORE["StoreForReview Lambda\nDynamoDB + task token"]
-        WAIT["WaitForTaskToken\npaused · zero cost"]
-        UI["ReviewUI Lambda\nAPI Gateway · SRE queue"]
-        APPROVE["OnApprove Lambda\nS3 move · MLflow tag"]
-        REJECT["OnReject Lambda\nfeedback-in-log · raw/"]
+        SF["trigger_sf_review<br/>fire and forget"]
+        STORE["StoreForReview Lambda<br/>DynamoDB + task token"]
+        WAIT["WaitForTaskToken<br/>paused · zero cost"]
+        UI["ReviewUI Lambda<br/>API Gateway · SRE queue"]
+        APPROVE["OnApprove Lambda<br/>S3 move · MLflow tag"]
+        REJECT["OnReject Lambda<br/>feedback-in-log · raw/"]
         SF --> STORE --> WAIT
         WAIT -->|"SRE approves"| APPROVE
         WAIT -->|"SRE rejects + feedback"| REJECT
@@ -46,7 +46,7 @@ flowchart TB
     end
 
     subgraph OBS["Observability"]
-        MLFLOW["MLflow · DagsHub"]
+        MLFLOW["MLflow <br/> DagsHub"]
         DEEPEVAL["DeepEval"]
         GRAFANA["Grafana"]
     end
@@ -162,21 +162,20 @@ graph LR
 
 Rather than writing RCA results directly to storage, the pipeline hands off to a **fully serverless HITL review layer** built on AWS Step Functions, Lambda, API Gateway, and DynamoDB. Airflow fires and forgets — the DAG completes as `SUCCESS` without waiting for a human decision, keeping pipeline slots free regardless of how long review takes.
 
-### HITL Flow
-
+## [HITL Flow](aws\step-functions\README.md)
 ```mermaid
 flowchart TB
     subgraph AIRFLOW["Airflow — last task"]
-        TRG["trigger_sf_review\nsfn.start_execution()\nreturns immediately"]
+        TRG["trigger_sf_review<br/>sfn.start_execution()<br/>returns immediately"]
     end
 
     subgraph SF["AWS Step Functions state machine"]
-        STORE["StoreForReview Lambda\nwrites RCA + task token\nto DynamoDB"]
-        WAIT["WaitForTaskToken\npaused indefinitely\n72h heartbeat timeout"]
+        STORE["StoreForReview Lambda<br/>writes RCA + task token<br/>to DynamoDB"]
+        WAIT["WaitForTaskToken<br/>paused indefinitely<br/>72h heartbeat timeout"]
         ROUTE{"RouteDecision"}
         APPROVE["OnApprove Lambda"]
         REJECT["OnReject Lambda"]
-        TIMEOUT["EscalateTimeout\nOnReject with\ntimeout feedback"]
+        TIMEOUT["EscalateTimeout<br/>OnReject with<br/>timeout feedback"]
 
         STORE --> WAIT
         WAIT -->|"send_task_success"| ROUTE
@@ -186,21 +185,21 @@ flowchart TB
     end
 
     subgraph UI["Review UI — API Gateway + Lambda"]
-        Q["GET /queue\nlist pending RCAs\nfrom DynamoDB"]
-        D["GET /rca/{id}\nfull RCA + AI critic\n+ raw log content"]
-        A["POST /approve\nsend_task_success(token)"]
-        R["POST /reject\nsend_task_failure(token)\n+ feedback form"]
+        Q["GET /queue<br/>list pending RCAs<br/>from DynamoDB"]
+        D["GET /rca/{id}<br/>full RCA + AI critic<br/>+ raw log content"]
+        A["POST /approve<br/>send_task_success(token)"]
+        R["POST /reject<br/>send_task_failure(token)<br/>+ feedback form"]
     end
 
     subgraph OUTPUTS["On Approve"]
-        S3M["S3 raw/ → processed/\nlog archived"]
-        S3R["S3 rca-results/\nRCA JSON written"]
-        ML["MLflow tag\nhuman_verdict=approved\nrater_id"]
+        S3M["S3 raw/ → processed/<br/>log archived"]
+        S3R["S3 rca-results/<br/>RCA JSON written"]
+        ML["MLflow tag<br/>human_verdict=approved<br/>rater_id"]
     end
 
     subgraph RETRY["On Reject — feedback-in-log"]
-        FBL["New log written to S3 raw/\noriginal log + AI critic output\n+ human feedback embedded\nas # === comment lines"]
-        NEXT["Next scheduled DAG run\npicks up naturally\nagents read prior context"]
+        FBL["New log written to S3 raw/<br/>original log + AI critic output<br/>+ human feedback embedded<br/>as # === comment lines"]
+        NEXT["Next scheduled DAG run<br/>picks up naturally<br/>agents read prior context"]
     end
 
     TRG -->|"starts execution"| STORE
@@ -277,6 +276,12 @@ The new timestamped file (`raw/kubelet_20260315_rejected_20260329_102200.log`) i
 ```
 InfraMind/
 ├── dags/
+│   ├── tasks/
+|   |     ├── embed.py
+|   |     ├── fetch.py
+|   |     ├── normalize.py
+|   |     ├── rca.py
+|   |     └── review.py
 │   ├── dag.py              # Airflow DAG — fetch → normalize → run_rca → trigger_sf_review
 │   ├── workflow.py         # RCA orchestrator + self-correction loop
 │   └── ingestion.py        # S3 log fetching
@@ -323,27 +328,27 @@ InfraMind/
 graph TB
     subgraph "Docker Compose Stack"
         subgraph "Airflow Components"
-            WEBSERVER["Webserver :8080\nUI + REST API"]
-            SCHEDULER["Scheduler\nDAG parsing · Task scheduling"]
-            TRIGGERER["Triggerer\nAsync task support"]
-            POSTGRES[("PostgreSQL\nMetadata DB")]
+            WEBSERVER["Webserver :8080<br/>UI + REST API"]
+            SCHEDULER["Scheduler<br/>DAG parsing · Task scheduling"]
+            TRIGGERER["Triggerer<br/>Async task support"]
+            POSTGRES[("PostgreSQL<br/>Metadata DB")]
         end
 
         subgraph "Persistent Volumes"
-            DAGS_VOL["./dags/\nDAG definitions"]
-            CHROMA_VOL["./chroma_data/\nVector DB persist"]
-            LOGS_VOL["./logs/\nTask logs"]
+            DAGS_VOL["./dags/<br/>DAG definitions"]
+            CHROMA_VOL["./chroma_data/<br/>Vector DB persist"]
+            LOGS_VOL["./logs/<br/>Task logs"]
         end
     end
 
     subgraph "AWS Services"
-        BEDROCK["AWS Bedrock\nap-south-1 · LLM inference"]
-        S3["S3 Bucket\nLog storage + RCA results"]
-        MLFLOW["DagsHub MLflow\nExperiment tracking"]
-        SF_AWS["Step Functions\nHITL state machine"]
-        LAMBDA["Lambda\nHITL compute"]
-        APIGW["API Gateway\nReview UI"]
-        DYNAMO["DynamoDB\nPending queue"]
+        BEDROCK["AWS Bedrock<br/>ap-south-1 · LLM inference"]
+        S3["S3 Bucket<br/>Log storage + RCA results"]
+        MLFLOW["DagsHub MLflow<br/>Experiment tracking"]
+        SF_AWS["Step Functions<br/>HITL state machine"]
+        LAMBDA["Lambda<br/>HITL compute"]
+        APIGW["API Gateway<br/>Review UI"]
+        DYNAMO["DynamoDB<br/>Pending queue"]
     end
 
     WEBSERVER --> POSTGRES
@@ -662,7 +667,7 @@ Each approved RCA written to `s3://bucket/rca-results/results_<incident_id>.json
   "severity": "High",
   "summary": "PostgreSQL connection pool exhaustion causing API 503 errors",
   "root_cause": "Max connections (100) exceeded due to connection leak in ORM session management.",
-  "immediate_fix": "1. Restart API pods\n2. Apply connection timeout (30s)\n3. Deploy hotfix with session.close()",
+  "immediate_fix": "1. Restart API pods<br/>2. Apply connection timeout (30s)<br/>3. Deploy hotfix with session.close()",
   "preventive_measures": [
     "Implement connection pool monitoring alerts",
     "Add circuit breaker pattern for database calls",
@@ -870,7 +875,7 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 - **Issues**: [GitHub Issues](https://github.com/nasim-raj-laskar/InfraMind/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/nasim-raj-laskar/InfraMind/discussions)
-- **LinkedIn**: [Nasim Raj Laskar](https://linkedin.com/in/nasim-raj-laskar)
+- **MAIL**: [Nasim Raj Laskar](nasimrajlaskar.it.018@gmail.com)
 
 ---
 
