@@ -2,15 +2,7 @@
 
 **A production-grade LLMOps platform for autonomous infrastructure root cause analysis (RCA)** — leveraging multi-agent orchestration, retrieval-augmented generation (RAG), self-correcting LLM workflows on AWS Bedrock, and a fully serverless human-in-the-loop (HITL) review layer. Built for SRE/DevOps teams requiring zero-touch incident triage with full observability, experiment tracking, and quality gates.
 
-```mermaid
-flowchart LR
-    A["Logs (S3)"] --> B["InfraMind AI Engine<br/>(RAG + Multi-Agent LLM)"]
-    B --> C["AI RCA Output"]
-    C --> D["Human Review (Step Functions)"]
-    D -->|Approve| E["Final RCA + Storage"]
-    D -->|Reject + Feedback| F["Feedback injected into logs"]
-    F --> A
-```
+![](assets/high-arch.png)
 ---
 
 ## System Architecture
