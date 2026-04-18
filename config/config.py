@@ -20,11 +20,11 @@ def _load(filename: str) -> dict:
         return yaml.safe_load(f)
 
 
-# ── Raw YAML dicts ────────────────────────────────────────────
+#  Raw YAML dicts 
 _settings = _load("settings.yaml")
 _models   = _load("models.yaml")
 
-# ── Convenience accessors ─────────────────────────────────────
+#  Convenience accessors 
 
 # Pipeline
 QUALITY_THRESHOLD   = _settings["pipeline"]["quality_threshold"]

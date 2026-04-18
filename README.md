@@ -1,14 +1,14 @@
 # InfraMind
 
-**A LLMOps platform for autonomous infrastructure root cause analysis (RCA)** — leveraging multi-agent orchestration, retrieval-augmented generation (RAG), and self-correcting LLM workflows on AWS Bedrock. Built for SRE/DevOps teams requiring zero-touch incident triage with full observability, experiment tracking, and quality gates.
+**A production-grade LLMOps platform for autonomous infrastructure root cause analysis (RCA)** — leveraging multi-agent orchestration, retrieval-augmented generation (RAG), self-correcting LLM workflows on AWS Bedrock, and a fully serverless human-in-the-loop (HITL) review layer. Built for SRE/DevOps teams requiring zero-touch incident triage with full observability, experiment tracking, and quality gates.
 
 ---
 
 ## System Architecture
 
 ### High-Level Pipeline Flow
-```mermaid
 
+```mermaid
 flowchart TB
     subgraph INGEST["Data Ingestion · Airflow DAG"]
         LOGS["S3 raw/"] --> FETCH["fetch_logs"] --> NORM["normalize_logs"] --> NORM_OUT["Normalized JSON"]
@@ -26,26 +26,36 @@ flowchart TB
     end
 
     subgraph AGENTS["Multi-Agent Pipeline · AWS Bedrock"]
-        A1["1 Investigator"] --> A2["2 Root Cause <br/> evidence"] --> A3["3 Fix Generator <br/> remediation steps"] --> A4["4 Formatter <br/> structured JSON"]
-        A4 --> CRITIC{"5 Critic <br/> Mistral 7B Score ≥ 0.8?"}
-        CRITIC -->|"No <br/> inject feedback"| A1
+        A1["1 Investigator"] --> A2["2 Root Cause"] --> A3["3 Fix Generator"] --> A4["4 Formatter"]
+        A4 --> CRITIC{"5 Critic · Mistral 7B\nScore ≥ 0.8?"}
+        CRITIC -->|"No · inject feedback"| A1
         CRITIC -->|Max retries| FAIL["FAILED"]
     end
 
-    subgraph OBS["Observability & Output"]
-        MLFLOW["MLflow · DagsHub <br/> params · metrics · artifacts"]
-        DEEPEVAL["DeepEval <br/> faithfulness · relevancy · recall"]
-        GRAFANA["Grafana <br/> throughput · cost · latency"]
-        S3_OUT["S3 rca-results/ <br/>structured JSON"]
-        SLACK["Slack <br/> incident alert"]
+    subgraph HITL["Human-in-the-Loop · AWS Step Functions"]
+        SF["trigger_sf_review\nfire and forget"]
+        STORE["StoreForReview Lambda\nDynamoDB + task token"]
+        WAIT["WaitForTaskToken\npaused · zero cost"]
+        UI["ReviewUI Lambda\nAPI Gateway · SRE queue"]
+        APPROVE["OnApprove Lambda\nS3 move · MLflow tag"]
+        REJECT["OnReject Lambda\nfeedback-in-log · raw/"]
+        SF --> STORE --> WAIT
+        WAIT -->|"SRE approves"| APPROVE
+        WAIT -->|"SRE rejects + feedback"| REJECT
+        REJECT -->|"next DAG run picks up"| LOGS
+    end
+
+    subgraph OBS["Observability"]
+        MLFLOW["MLflow · DagsHub"]
+        DEEPEVAL["DeepEval"]
+        GRAFANA["Grafana"]
     end
 
     NORM_OUT --> CHECK
     NORM_OUT -->|query embedding| CHROMA
     L8 & L70 -->|LLM inference| A1
     CONTEXT -->|injected into prompts| A1
-    CRITIC -->|pass| S3_OUT
-    CRITIC -->|pass| SLACK
+    CRITIC -->|pass| SF
     AGENTS -->|telemetry| MLFLOW
     AGENTS -->|eval| DEEPEVAL
     DEEPEVAL --> MLFLOW
@@ -58,6 +68,7 @@ flowchart TB
     classDef amber fill:#854F0B,color:#FAEEDA,stroke:#633806
     classDef green fill:#3B6D11,color:#EAF3DE,stroke:#27500A
     classDef red fill:#A32D2D,color:#FCEBEB,stroke:#791F1F
+    classDef hitl fill:#185FA5,color:#E6F1FB,stroke:#0C447C
 
     class LOGS,FETCH,NORM,NORM_OUT teal
     class RUNBOOKS,EMBED,CHROMA,CONTEXT blue
@@ -65,7 +76,8 @@ flowchart TB
     class A1,A2,A3,A4 purple
     class CRITIC coral
     class FAIL red
-    class MLFLOW,DEEPEVAL,GRAFANA,S3_OUT,SLACK green
+    class SF,STORE,WAIT,UI,APPROVE,REJECT hitl
+    class MLFLOW,DEEPEVAL,GRAFANA green
 ```
 
 ### Multi-Agent Workflow with Self-Correction
@@ -78,39 +90,39 @@ sequenceDiagram
     participant Bedrock as AWS Bedrock<br/>(Llama 3 / Mistral 7B)
     participant Critic
     participant MLflow
-    participant S3
-    
+    participant SF as Step Functions
+
     Airflow->>Orchestrator: Trigger RCA (normalized_log)
-    
+
     loop Self-Correction (max 2 retries)
-        Orchestrator->>RAG: Query runbook context<br/>(semantic search)
+        Orchestrator->>RAG: Query runbook context (semantic search)
         RAG-->>Orchestrator: Top-6 relevant chunks
-        
-        Orchestrator->>Bedrock: Agent 1: Investigator<br/>(log + context)
+
+        Orchestrator->>Bedrock: Agent 1: Investigator (log + context)
         Bedrock-->>Orchestrator: Incident summary
-        
-        Orchestrator->>Bedrock: Agent 2: Root Cause<br/>(summary + context)
+
+        Orchestrator->>Bedrock: Agent 2: Root Cause (summary + context)
         Bedrock-->>Orchestrator: Hypothesis + evidence
-        
-        Orchestrator->>Bedrock: Agent 3: Fix Generator<br/>(root cause + context)
+
+        Orchestrator->>Bedrock: Agent 3: Fix Generator (root cause + context)
         Bedrock-->>Orchestrator: Remediation steps
-        
-        Orchestrator->>Bedrock: Agent 4: Formatter<br/>(all outputs)
+
+        Orchestrator->>Bedrock: Agent 4: Formatter (all outputs)
         Bedrock-->>Orchestrator: Structured RCA JSON
-        
+
         Orchestrator->>Critic: Evaluate RCA quality
         Critic->>Bedrock: Score faithfulness + relevancy (Mistral-7B)
         Bedrock-->>Critic: Quality metrics
         Critic-->>Orchestrator: Score + feedback
-        
-        Orchestrator->>MLflow: Log attempt metrics<br/>(score, tokens, latency)
-        
+
+        Orchestrator->>MLflow: Log attempt metrics (score, tokens, latency)
+
         alt Score ≥ 0.8
-            Orchestrator->>S3: Write final RCA
+            Orchestrator->>SF: trigger_sf_review (fire and forget)
             Orchestrator->>MLflow: Mark run SUCCESS
             Orchestrator-->>Airflow: Complete
         else Score < 0.8 && retries left
-            Note over Orchestrator: Inject critic feedback<br/>into next iteration
+            Note over Orchestrator: Inject critic feedback into next iteration
         else Max retries exceeded
             Orchestrator->>MLflow: Mark run FAILED
             Orchestrator-->>Airflow: Fail with diagnostics
@@ -124,95 +136,136 @@ sequenceDiagram
 graph LR
     subgraph "Indexing Phase (One-time)"
         MD["Markdown Runbooks<br/>SOP Documents"]
-        SPLIT["RecursiveCharacterTextSplitter<br/>chunk_size=1000<br/>overlap=200"]
+        SPLIT["RecursiveCharacterTextSplitter<br/>chunk_size=1000 · overlap=200"]
         EMB_IDX["Bedrock Titan Embed<br/>1536-dim vectors"]
         STORE[("ChromaDB<br/>Persistent Storage")]
-        
-        MD --> SPLIT
-        SPLIT --> EMB_IDX
-        EMB_IDX --> STORE
+        MD --> SPLIT --> EMB_IDX --> STORE
     end
-    
+
     subgraph "Query Phase (Per RCA)"
         QUERY["Log Error Context<br/>+ Agent Question"]
         EMB_Q["Bedrock Titan Embed<br/>Query Vector"]
         SEARCH["Cosine Similarity<br/>Top-K=6"]
         RERANK["MMR Reranking<br/>Diversity Filter"]
         CONTEXT["Augmented Context<br/>to LLM Prompt"]
-        
-        QUERY --> EMB_Q
-        EMB_Q --> SEARCH
+        QUERY --> EMB_Q --> SEARCH --> RERANK --> CONTEXT
         STORE -."Vector Search".-> SEARCH
-        SEARCH --> RERANK
-        RERANK --> CONTEXT
     end
-    
+
     style STORE fill:#4a3a1a,color:#fff
     style CONTEXT fill:#1a4a2e,color:#fff
 ```
 
 ---
 
-## Technology Stack
+## Human-in-the-Loop (HITL) Architecture
 
-### LLMOps & GenAI Infrastructure
+Rather than writing RCA results directly to storage, the pipeline hands off to a **fully serverless HITL review layer** built on AWS Step Functions, Lambda, API Gateway, and DynamoDB. Airflow fires and forgets — the DAG completes as `SUCCESS` without waiting for a human decision, keeping pipeline slots free regardless of how long review takes.
+
+### HITL Flow
 
 ```mermaid
-graph TB
-    subgraph "Orchestration Layer"
-        AIRFLOW["Apache Airflow 3.0<br/>Astro Runtime 12.x<br/>DAG-based Workflow"]
+flowchart TB
+    subgraph AIRFLOW["Airflow — last task"]
+        TRG["trigger_sf_review\nsfn.start_execution()\nreturns immediately"]
     end
-    
-    subgraph "LLM Inference (AWS Bedrock)"
-        LLAMA8["Llama 3 8B<br/>Short logs ≤ 2000 chars<br/>$0.0003/1K input tokens"]
-        LLAMA70["Llama 3 70B<br/>Long logs > 2000 chars<br/>$0.00265/1K input tokens"]
-        MISTRAL["Mistral 7B<br/>Critic agent only<br/>Quality scoring"]
-        TITAN["Titan Embed v2<br/>1536-dim embeddings<br/>RAG indexing + retrieval"]
+
+    subgraph SF["AWS Step Functions state machine"]
+        STORE["StoreForReview Lambda\nwrites RCA + task token\nto DynamoDB"]
+        WAIT["WaitForTaskToken\npaused indefinitely\n72h heartbeat timeout"]
+        ROUTE{"RouteDecision"}
+        APPROVE["OnApprove Lambda"]
+        REJECT["OnReject Lambda"]
+        TIMEOUT["EscalateTimeout\nOnReject with\ntimeout feedback"]
+
+        STORE --> WAIT
+        WAIT -->|"send_task_success"| ROUTE
+        WAIT -->|"HumanRejection"| REJECT
+        WAIT -->|"HeartbeatTimeout"| TIMEOUT
+        ROUTE --> APPROVE
     end
-    
-    subgraph "Vector Store & RAG"
-        CHROMA["ChromaDB<br/>Persistent HNSW index<br/>Docker volume mount"]
-        LANGCHAIN["LangChain<br/>RAG orchestration<br/>Prompt templates"]
+
+    subgraph UI["Review UI — API Gateway + Lambda"]
+        Q["GET /queue\nlist pending RCAs\nfrom DynamoDB"]
+        D["GET /rca/{id}\nfull RCA + AI critic\n+ raw log content"]
+        A["POST /approve\nsend_task_success(token)"]
+        R["POST /reject\nsend_task_failure(token)\n+ feedback form"]
     end
-    
-    subgraph "LLMOps Observability"
-        MLFLOW["MLflow 2.x<br/>DagsHub remote backend<br/>Experiment tracking"]
-        DEEPEVAL["DeepEval<br/>LLM-as-judge metrics<br/>Faithfulness + Relevancy"]
+
+    subgraph OUTPUTS["On Approve"]
+        S3M["S3 raw/ → processed/\nlog archived"]
+        S3R["S3 rca-results/\nRCA JSON written"]
+        ML["MLflow tag\nhuman_verdict=approved\nrater_id"]
     end
-    
-    subgraph "Data Layer"
-        S3["AWS S3<br/>Log storage + RCA results<br/>Lifecycle policies"]
+
+    subgraph RETRY["On Reject — feedback-in-log"]
+        FBL["New log written to S3 raw/\noriginal log + AI critic output\n+ human feedback embedded\nas # === comment lines"]
+        NEXT["Next scheduled DAG run\npicks up naturally\nagents read prior context"]
     end
-    
-    AIRFLOW --> LLAMA8
-    AIRFLOW --> LLAMA70
-    AIRFLOW --> MISTRAL
-    AIRFLOW --> CHROMA
-    CHROMA --> TITAN
-    LANGCHAIN --> CHROMA
-    LANGCHAIN --> LLAMA8
-    LLAMA8 --> MLFLOW
-    LLAMA70 --> MLFLOW
-    MISTRAL --> MLFLOW
-    MISTRAL --> DEEPEVAL
-    AIRFLOW --> S3
-    
-    style LLAMA8 fill:#1a3a5c,color:#fff
-    style LLAMA70 fill:#1a3a5c,color:#fff
-    style MISTRAL fill:#4a1a5c,color:#fff
-    style TITAN fill:#1a4a2e,color:#fff
-    style MLFLOW fill:#1a4a2e,color:#fff
-    style CHROMA fill:#4a3a1a,color:#fff
+
+    TRG -->|"starts execution"| STORE
+    Q & D --> UI
+    A -->|"resumes SF"| ROUTE
+    R -->|"resumes SF"| REJECT
+    APPROVE --> S3M & S3R & ML
+    REJECT --> FBL --> NEXT
 ```
 
-| Component | Technology | Purpose |
-|-----------|-----------|----------|
+### Dual-Critic Quality Gate
+
+Every RCA passes through two critics before reaching an SRE:
+
+- **AI critic (Mistral 7B via DeepEval)** — scores faithfulness, answer relevancy, and contextual recall. Triggers the self-correction loop if score < 0.8.
+- **Human critic (SRE via Review UI)** — assesses semantic and domain correctness the AI cannot evaluate.
+
+On rejection, the SRE provides a structured `feedback_type` (`wrong_rc` / `wrong_fix` / `hallucination` / `incomplete`) plus free-text reason and an optional corrected root cause. Both the AI critic output and the human feedback are embedded into the rejected log file:
+
+```
+<original log content>
+
+# === RCA OUTPUT ===
+# summary: PostgreSQL connection pool exhausted
+# root_cause: ORM session leak in user_service.py
+# fix: Restart pods + add session.close()
+
+# === HUMAN FEEDBACK ===
+# feedback_type: wrong_rc
+# reason: Actual cause was OOM killer terminating the pod
+# corrected_root_cause: Memory limit breached — container hit 512Mi ceiling
+# timestamp: 2026-03-29T10:22:00Z
+```
+
+The new timestamped file (`raw/kubelet_20260315_rejected_20260329_102200.log`) is picked up on the next scheduled DAG run. The investigator prompt instructs agents to treat `# ===` sections as prior analysis context and human corrections — avoiding the same mistake while re-examining the raw evidence independently.
+
+> **Why no auto-retrigger?** Deliberately omitted to prevent race conditions between a rejection-triggered run and an in-progress pipeline processing a different log batch.
+
+### HITL AWS Components
+
+| Component | Service | Purpose |
+|-----------|---------|---------|
+| State machine | AWS Step Functions | `waitForTaskToken` pause — zero cost while waiting |
+| Pending queue | DynamoDB `rca_reviews` | Stores RCA + task token per incident |
+| Review interface | Lambda + API Gateway | Serverless HTML/JS SRE queue — no container to maintain |
+| Approve action | Lambda `InfraMind-OnApprove` | S3 move, rca-results write, MLflow tag |
+| Reject action | Lambda `InfraMind-OnReject` | Feedback-in-log write to `raw/`, MLflow tag |
+| Handoff | Lambda `InfraMind-StoreForReview` | Receives RCA from Airflow, writes to DynamoDB |
+
+---
+
+## Technology Stack
+
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
 | **Orchestration** | Apache Airflow 3 (Astro CLI) | DAG-based pipeline scheduling, task dependency management |
-| **LLM Runtime** | AWS Bedrock (Llama 3 8B / 70B + Mistral 7B) | Serverless LLM inference — model auto-selected by log size |
+| **LLM Runtime** | AWS Bedrock — Llama 3 8B / 70B + Mistral 7B | Serverless LLM inference — model auto-selected by log size |
 | **Embeddings** | AWS Bedrock Titan Embed v2 | 1536-dim semantic vectors for RAG retrieval |
 | **Vector DB** | ChromaDB 0.4.x | Persistent HNSW index with cosine similarity search |
 | **RAG Framework** | LangChain 0.1.x | Prompt engineering, retrieval chains, agent orchestration |
-| **Experiment Tracking** | MLflow 2.x (DagsHub) | Hyperparameter logging, metric tracking, model versioning |
+| **HITL Orchestration** | AWS Step Functions | `waitForTaskToken` stateful human review pause |
+| **HITL Compute** | AWS Lambda (Python 3.11) | StoreForReview · OnApprove · OnReject · ReviewUI |
+| **HITL API** | AWS API Gateway (REST, Regional) | `/queue` · `/rca/{id}` · `/approve` · `/reject` · `/log` |
+| **HITL Queue** | AWS DynamoDB (on-demand) | Pending RCA store with task token per incident |
+| **Experiment Tracking** | MLflow 2.x (DagsHub) | Hyperparameter logging, metric tracking, human verdict tags |
 | **LLM Evaluation** | DeepEval 0.21.x | Faithfulness, answer relevancy, contextual recall metrics |
 | **Object Storage** | AWS S3 | Raw logs, processed logs, RCA results, model artifacts |
 | **Monitoring** | Prometheus + Grafana | Pipeline metrics, token usage, latency tracking |
@@ -224,9 +277,9 @@ graph TB
 ```
 InfraMind/
 ├── dags/
-│   ├── dag.py          # Airflow DAG — 5 task pipeline
-│   ├── workflow.py     # RCA orchestrator + self-correction loop
-│   └── ingestion.py    # S3 log fetching
+│   ├── dag.py              # Airflow DAG — fetch → normalize → run_rca → trigger_sf_review
+│   ├── workflow.py         # RCA orchestrator + self-correction loop
+│   └── ingestion.py        # S3 log fetching
 ├── agents/
 │   ├── investigator.py
 │   ├── root_cause.py
@@ -234,22 +287,30 @@ InfraMind/
 │   ├── formatter.py
 │   └── critic.py
 ├── core/
-│   ├── vectordb.py     # ChromaDB + Bedrock embeddings
-│   ├── normalizer.py   # Multi-format log parser
-│   ├── evaluator.py    # DeepEval integration
-│   ├── tracker.py      # MLflow helpers
+│   ├── vectordb.py         # ChromaDB + Bedrock embeddings
+│   ├── normalizer.py       # Multi-format log parser
+│   ├── evaluator.py        # DeepEval integration
+│   ├── tracker.py          # MLflow helpers
+│   ├── sfn_client.py       # Step Functions start_execution wrapper
 │   └── bedrock_client.py
+├── hitl/
+│   ├── lambdas/
+│   │   ├── store_for_review.py   # StoreForReview Lambda
+│   │   ├── on_approve.py         # OnApprove Lambda
+│   │   ├── on_reject.py          # OnReject Lambda
+│   │   └── review_ui.py          # ReviewUI Lambda — serves HTML + API routes
+│   └── state_machine.json        # Step Functions ASL definition
 ├── config/
-│   ├── config.py       # Single source of truth for all config
+│   ├── config.py           # Single source of truth for all config
 │   ├── settings.yaml
 │   └── models.yaml
-├── prompts/            # Agent prompt templates
-├── runbook/            # Markdown runbooks (RAG knowledge base)
-├── Dockerfile          # Astro Runtime + PYTHONPATH
-├── docker-compose.override.yml  # ChromaDB volume persistence
+├── prompts/                # Agent prompt templates
+├── runbook/                # Markdown runbooks (RAG knowledge base)
+├── Dockerfile              # Astro Runtime + PYTHONPATH
+├── docker-compose.override.yml   # ChromaDB volume persistence
 ├── requirements.txt
-├── restart.ps1         # Windows clean restart script
-└── restart.sh          # macOS/Linux clean restart script
+├── restart.ps1             # Windows clean restart script
+└── restart.sh              # macOS/Linux clean restart script
 ```
 
 ---
@@ -262,37 +323,40 @@ InfraMind/
 graph TB
     subgraph "Docker Compose Stack"
         subgraph "Airflow Components"
-            WEBSERVER["Webserver<br/>:8080<br/>UI + REST API"]
-            SCHEDULER["Scheduler<br/>DAG parsing<br/>Task scheduling"]
-            TRIGGERER["Triggerer<br/>Async task support"]
-            POSTGRES[("PostgreSQL<br/>Metadata DB")]
+            WEBSERVER["Webserver :8080\nUI + REST API"]
+            SCHEDULER["Scheduler\nDAG parsing · Task scheduling"]
+            TRIGGERER["Triggerer\nAsync task support"]
+            POSTGRES[("PostgreSQL\nMetadata DB")]
         end
-        
+
         subgraph "Persistent Volumes"
-            DAGS_VOL["./dags/<br/>DAG definitions"]
-            CHROMA_VOL["./chroma_data/<br/>Vector DB persist"]
-            LOGS_VOL["./logs/<br/>Task logs"]
-        end
-        
-        subgraph "External Services"
-            BEDROCK["AWS Bedrock<br/>ap-south-1<br/>LLM inference"]
-            S3["S3 Bucket<br/>Log storage"]
-            MLFLOW["DagsHub MLflow<br/>Experiment tracking"]
+            DAGS_VOL["./dags/\nDAG definitions"]
+            CHROMA_VOL["./chroma_data/\nVector DB persist"]
+            LOGS_VOL["./logs/\nTask logs"]
         end
     end
-    
+
+    subgraph "AWS Services"
+        BEDROCK["AWS Bedrock\nap-south-1 · LLM inference"]
+        S3["S3 Bucket\nLog storage + RCA results"]
+        MLFLOW["DagsHub MLflow\nExperiment tracking"]
+        SF_AWS["Step Functions\nHITL state machine"]
+        LAMBDA["Lambda\nHITL compute"]
+        APIGW["API Gateway\nReview UI"]
+        DYNAMO["DynamoDB\nPending queue"]
+    end
+
     WEBSERVER --> POSTGRES
     SCHEDULER --> POSTGRES
-    SCHEDULER --> DAGS_VOL
-    SCHEDULER --> CHROMA_VOL
-    SCHEDULER --> BEDROCK
-    SCHEDULER --> S3
-    SCHEDULER --> MLFLOW
-    TRIGGERER --> POSTGRES
-    
+    SCHEDULER --> DAGS_VOL & CHROMA_VOL
+    SCHEDULER --> BEDROCK & S3 & MLFLOW
+    SCHEDULER -->|"trigger_sf_review"| SF_AWS
+    SF_AWS --> LAMBDA --> DYNAMO & S3
+    APIGW --> LAMBDA
+
     style SCHEDULER fill:#1a3a5c,color:#fff
-    style CHROMA_VOL fill:#4a3a1a,color:#fff
-    style BEDROCK fill:#4a1a1a,color:#fff
+    style SF_AWS fill:#185FA5,color:#fff
+    style LAMBDA fill:#534AB7,color:#fff
 ```
 
 ### Airflow DAG Task Dependencies
@@ -313,8 +377,9 @@ graph TB
 |-----------|-------------|-------|
 | **Astro CLI** | v1.20+ | [Install guide](https://www.astronomer.io/docs/astro/cli/install-cli) |
 | **Docker Desktop** | 4.25+ | 8GB RAM, 4 CPU cores recommended |
-| **AWS Account** | Bedrock enabled | Llama 3, Mistral 7B + Titan Embed in `ap-south-1` region |
+| **AWS Account** | Bedrock + Lambda + Step Functions enabled | All services in `ap-south-1` region |
 | **S3 Bucket** | Standard tier | Versioning + lifecycle policies recommended |
+| **DynamoDB Table** | `rca_reviews` on-demand | Created automatically or via console |
 | **DagsHub Account** | Free tier | MLflow tracking backend |
 
 ### AWS Bedrock Model Access
@@ -327,6 +392,18 @@ Enable the following models in AWS Console → Bedrock → Model access:
 - `amazon.titan-embed-text-v2:0` — RAG embeddings
 
 **Region**: `ap-south-1` (Mumbai) — lowest latency for Asia-Pacific
+
+### IAM Permissions Required
+
+Your Airflow IAM user needs the following in addition to existing Bedrock + S3 permissions:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "states:StartExecution",
+  "Resource": "arn:aws:states:ap-south-1:YOUR_ACCOUNT:stateMachine:InfraMind-HITL"
+}
+```
 
 ---
 
@@ -344,7 +421,7 @@ cd InfraMind
 Create `.env` at project root:
 
 ```bash
-# AWS Credentials (IAM user with Bedrock + S3 access)
+# AWS Credentials (IAM user with Bedrock + S3 + Step Functions access)
 AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
 AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
 AWS_REGION=ap-south-1
@@ -354,11 +431,55 @@ DAGSHUB_USERNAME=your_username
 DAGSHUB_TOKEN=your_dagshub_token
 MLFLOW_TRACKING_URI=https://dagshub.com/your_username/InfraMind.mlflow
 
+# HITL — Step Functions
+SF_STATE_MACHINE_ARN=arn:aws:states:ap-south-1:YOUR_ACCOUNT:stateMachine:InfraMind-HITL
+INFRAMIND_S3_BUCKET=your-bucket-name
 ```
 
-The IAM policy should grant `bedrock:InvokeModel` on the four model ARNs above (`meta.llama3-*`, `mistral.mistral-7b-*`, `amazon.titan-embed-*`), plus `s3:GetObject`, `s3:PutObject`, `s3:ListBucket`, and `s3:DeleteObject` on your bucket.
+### 3. Deploy HITL Lambda Functions
 
-### 3. Start Airflow Stack
+Deploy the four Lambda functions in `hitl/lambdas/` to AWS (`ap-south-1`):
+
+| Function | Trigger | Timeout | Layer needed |
+|----------|---------|---------|-------------|
+| `InfraMind-StoreForReview` | Step Functions | 10s | None |
+| `InfraMind-OnApprove` | Step Functions | 30s | `mlflow` |
+| `InfraMind-OnReject` | Step Functions | 30s | `mlflow` |
+| `InfraMind-ReviewUI` | API Gateway | 10s | None |
+
+Build the mlflow Lambda Layer:
+
+```bash
+mkdir -p python
+pip install mlflow requests urllib3 packaging \
+  --target python/ \
+  --platform manylinux2014_x86_64 \
+  --python-version 3.11 \
+  --only-binary=:all:
+zip -r mlflow-layer.zip python/
+# Upload to Lambda → Layers → Create layer → attach to OnApprove + OnReject
+```
+
+### 4. Deploy Step Functions State Machine
+
+Go to AWS Console → Step Functions → Create state machine → paste `hitl/state_machine.json`. Copy the ARN into your `.env` as `SF_STATE_MACHINE_ARN`.
+
+### 5. Deploy API Gateway
+
+Create a REST API (`InfraMind-HITL-API`, Regional, `ap-south-1`) with the following routes, all pointing to `InfraMind-ReviewUI` with **Lambda Proxy integration enabled**:
+
+```
+GET  /          → serves the HTML review UI
+GET  /queue     → list pending RCAs from DynamoDB
+GET  /rca/{id}  → full RCA detail + AI critic + raw log
+GET  /log       → raw log content from S3 (?key=raw/...)
+POST /approve   → send_task_success(token)
+POST /reject    → send_task_failure(token) + human feedback
+```
+
+Enable CORS on all resources → Deploy to stage `prod` → copy the invoke URL into `InfraMind-ReviewUI` Lambda as the `API` constant.
+
+### 6. Start Airflow Stack
 
 **Windows (PowerShell)**:
 
@@ -373,9 +494,21 @@ chmod +x restart.sh
 ./restart.sh
 ```
 
-Both scripts: stop existing containers, start Astro, wait for the scheduler to be ready, then apply pools and Airflow variables automatically.
+Both scripts stop existing containers, start Astro, wait for the scheduler, then apply pools and Airflow variables automatically.
 
-### 4. Verify Deployment
+### 7. Set Airflow Variables
+
+```bash
+SCHEDULER=$(docker ps --format "{{.Names}}" | grep scheduler)
+
+docker exec $SCHEDULER airflow variables set INFRAMIND_S3_BUCKET your-bucket-name
+docker exec $SCHEDULER airflow variables set INFRAMIND_S3_PREFIX raw/
+docker exec $SCHEDULER airflow variables set INFRAMIND_MAX_LOGS 3
+docker exec $SCHEDULER airflow variables set INFRAMIND_FORCE_REBUILD false
+docker exec $SCHEDULER airflow variables set SF_STATE_MACHINE_ARN arn:aws:states:ap-south-1:YOUR_ACCOUNT:stateMachine:InfraMind-HITL
+```
+
+### 8. Verify Deployment
 
 ```bash
 # Check container health
@@ -387,14 +520,27 @@ docker logs -f $(docker ps --format "{{.Names}}" | grep scheduler)
 # Test ChromaDB persistence
 docker exec $(docker ps --format "{{.Names}}" | grep scheduler) \
   python -c "from core.vectordb import VectorDB; db = VectorDB(); print(db.collection.count())"
+
+# Test Step Functions connection
+docker exec $(docker ps --format "{{.Names}}" | grep scheduler) \
+  python -c "
+import boto3, json, os
+sfn = boto3.client('stepfunctions', region_name='ap-south-1')
+r = sfn.start_execution(
+  stateMachineArn=os.environ['SF_STATE_MACHINE_ARN'],
+  name='connection-test-001',
+  input=json.dumps({'rca_output': {'incident_id': 'test-001', 'severity': 'Low',
+    'log_source': 's3://bucket/raw/test.log', 'mlflow_run_id': 'test',
+    'summary': 'test', 'root_cause': 'test', 'immediate_fix': 'test'},
+    'ai_critic': {'score': 0.9, 'reasoning': 'test'}})
+)
+print('SF connection OK:', r['executionArn'])
+"
 ```
 
-### 5. Trigger DAG
+### 9. Trigger DAG
 
-**Via Airflow UI**:
-1. Navigate to `http://localhost:8080` (admin / admin)
-2. Enable `inframind_rca_pipeline` DAG
-3. Click "Trigger DAG" → "Trigger"
+**Via Airflow UI**: Navigate to `http://localhost:8080` (admin / admin) → enable `inframind_rca_pipeline` → click Trigger DAG.
 
 **Via CLI**:
 
@@ -414,51 +560,26 @@ curl -X POST "http://localhost:8080/api/v1/dags/inframind_rca_pipeline/dagRuns" 
 
 ---
 
-## S3 Data Layout & Lifecycle
+## S3 Data Layout
 
-### Bucket Structure
-
-```mermaid
-graph TB
-    subgraph "S3 Bucket: your-bucket-name"
-        subgraph "raw/ (Input)"
-            RAW1["app_api_20260316.log<br/>CloudWatch JSON"]
-            RAW2["kubelet_20260315.log<br/>K8s structured"]
-            RAW3["postgres_error.log<br/>RDS logs"]
-        end
-        
-        subgraph "processed/ (Archive)"
-            PROC1["app_api_20260316.log<br/>Moved after RCA"]
-            PROC2["kubelet_20260315.log<br/>Moved after RCA"]
-        end
-        
-        subgraph "rca-results/ (Output)"
-            RCA1["results_20260316_175519.json<br/>Structured RCA"]
-            RCA2["results_20260315_143022.json<br/>Structured RCA"]
-        end
-        
-        subgraph "mlflow-artifacts/ (Optional)"
-            ARTIFACT1["run_abc123/<br/>Model outputs"]
-        end
-    end
-    
-    RAW1 -."After RCA".-> PROC1
-    RAW2 -."After RCA".-> PROC2
-    
-    style RAW1 fill:#4a3a1a,color:#fff
-    style RCA1 fill:#1a4a2e,color:#fff
+```
+s3://your-bucket/
+├── raw/                          ← Airflow picks up from here
+│   ├── app_api_20260316.log      ← fresh log
+│   └── kubelet_rejected_*.log    ← rejected logs with embedded feedback
+├── processed/                    ← moved here on SRE approval
+│   └── app_api_20260316.log
+└── rca-results/                  ← written on SRE approval
+    └── results_<incident_id>.json
 ```
 
-### Automated Lifecycle Policies
-
-**Recommended S3 Lifecycle Rules**:
+**Lifecycle Policies**
 
 ```json
 {
   "Rules": [
     {
       "Id": "ArchiveProcessedLogs",
-      "Status": "Enabled",
       "Filter": {"Prefix": "processed/"},
       "Transitions": [
         {"Days": 30, "StorageClass": "STANDARD_IA"},
@@ -467,119 +588,71 @@ graph TB
     },
     {
       "Id": "RetainRCAResults",
-      "Status": "Enabled",
       "Filter": {"Prefix": "rca-results/"},
-      "Transitions": [
-        {"Days": 365, "StorageClass": "GLACIER_DEEP_ARCHIVE"}
-      ]
-    },
-    {
-      "Id": "DeleteOldArtifacts",
-      "Status": "Enabled",
-      "Filter": {"Prefix": "mlflow-artifacts/"},
-      "Expiration": {"Days": 180}
+      "Transitions": [{"Days": 365, "StorageClass": "GLACIER_DEEP_ARCHIVE"}]
     }
   ]
 }
 ```
 
-**Cost Optimization**:
-- `raw/`: Standard storage (transient, deleted after move)
-- `processed/`: Standard → IA (30d) → Glacier (90d)
-- `rca-results/`: Standard → Deep Archive (365d)
-- `mlflow-artifacts/`: Auto-delete after 180 days
-
 ---
 
 ## Configuration Management
 
-### Hierarchical Config Architecture
-
 ```mermaid
 graph TB
     subgraph "Configuration Sources"
-        YAML["config/settings.yaml<br/>Pipeline defaults"]
-        MODELS["config/models.yaml<br/>LLM model specs"]
-        ENV[".env<br/>Secrets & credentials"]
-        AIRFLOW_VARS["Airflow Variables<br/>Runtime overrides"]
+        YAML["config/settings.yaml · Pipeline defaults"]
+        MODELS["config/models.yaml · LLM model specs"]
+        ENV[".env · Secrets & credentials"]
+        AIRFLOW_VARS["Airflow Variables · Runtime overrides"]
     end
-    
+
     subgraph "Config Loader (config/config.py)"
-        LOADER["Singleton ConfigManager<br/>Merge + validate"]
+        LOADER["Singleton ConfigManager · Merge + validate"]
     end
-    
+
     subgraph "Runtime Components"
         DAG["Airflow DAG"]
         AGENTS["LLM Agents"]
         RAG["RAG Pipeline"]
+        HITL_CFG["HITL Lambda"]
     end
-    
-    YAML --> LOADER
-    MODELS --> LOADER
-    ENV --> LOADER
-    AIRFLOW_VARS --> LOADER
-    
-    LOADER --> DAG
-    LOADER --> AGENTS
-    LOADER --> RAG
-    
+
+    YAML & MODELS & ENV & AIRFLOW_VARS --> LOADER
+    LOADER --> DAG & AGENTS & RAG & HITL_CFG
+
     style LOADER fill:#4a3a1a,color:#fff
 ```
 
-### Key Configuration Parameters
-
 **Pipeline Settings** (`config/settings.yaml`)
 
-| Parameter | Default | Description | Impact |
-|-----------|---------|-------------|--------|
-| `pipeline.max_retries` | `2` | Self-correction loop iterations | Higher = better quality, more cost |
-| `pipeline.quality_threshold` | `0.8` | Minimum critic score to accept RCA | Lower = faster, less reliable |
-| `pipeline.timeout_seconds` | `300` | Max execution time per log | Prevents runaway LLM calls |
-| `vectordb.chunk_k` | `6` | RAG retrieval count | Higher = more context, slower |
-| `vectordb.chunk_size` | `1000` | Text splitter chunk size | Affects retrieval granularity |
-| `vectordb.chunk_overlap` | `200` | Overlap between chunks | Prevents context boundary loss |
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `pipeline.max_retries` | `2` | Self-correction loop iterations |
+| `pipeline.quality_threshold` | `0.8` | Minimum AI critic score to pass to HITL |
+| `pipeline.timeout_seconds` | `300` | Max execution time per log |
+| `vectordb.chunk_k` | `6` | RAG retrieval count |
+| `vectordb.chunk_size` | `1000` | Text splitter chunk size |
+| `vectordb.chunk_overlap` | `200` | Overlap between chunks |
 
-**Model Configuration** (`config/models.yaml`)
-
-The model used for Investigator, Root Cause, Fix Generator, and Formatter agents is chosen dynamically at runtime based on log size — Llama 3 8B for logs under 2000 characters, Llama 3 70B for anything larger. The Critic agent always uses Mistral 7B. Titan Embed v2 handles all RAG embeddings.
-
-```mermaid
-graph LR
-    LOG["Incoming Log"]
-    CHECK{"Log size > 2000 chars?"}
-    SMALL["Llama 3 8B\nInvestigator / Root Cause\nFix Generator / Formatter"]
-    LARGE["Llama 3 70B\nInvestigator / Root Cause\nFix Generator / Formatter"]
-    CRITIC["Mistral 7B\nCritic Agent\n(always)"]
-
-    LOG --> CHECK
-    CHECK -->|"No"| SMALL
-    CHECK -->|"Yes"| LARGE
-    SMALL --> CRITIC
-    LARGE --> CRITIC
-
-    style SMALL fill:#1a3a5c,color:#fff
-    style LARGE fill:#1a3a5c,color:#fff
-    style CRITIC fill:#4a1a5c,color:#fff
-    style CHECK fill:#4a3a1a,color:#fff
-```
-
-**Airflow Variables** (Runtime Overrides)
+**Airflow Variables**
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `INFRAMIND_MAX_LOGS` | `3` | Batch size per DAG run (cost control) |
-| `INFRAMIND_FORCE_REBUILD` | `false` | Rebuild ChromaDB index (after runbook updates) |
+| `INFRAMIND_S3_BUCKET` | — | S3 bucket name (required) |
+| `INFRAMIND_MAX_LOGS` | `3` | Batch size per DAG run |
+| `INFRAMIND_FORCE_REBUILD` | `false` | Rebuild ChromaDB index |
 | `INFRAMIND_SLACK_WEBHOOK` | — | Incident notification endpoint |
 | `INFRAMIND_ENABLE_CACHE` | `true` | Cache LLM responses (dev mode) |
-| `INFRAMIND_LOG_LEVEL` | `INFO` | Logging verbosity (DEBUG/INFO/WARNING) |
+| `INFRAMIND_LOG_LEVEL` | `INFO` | Logging verbosity |
+| `SF_STATE_MACHINE_ARN` | — | Step Functions state machine ARN (required) |
 
 ---
 
 ## RCA Output Schema
 
-### Structured JSON Format
-
-Each RCA result in `s3://bucket/rca-results/results_YYYYMMDD_HHMMSS.json`:
+Each approved RCA written to `s3://bucket/rca-results/results_<incident_id>.json`:
 
 ```json
 {
@@ -588,10 +661,10 @@ Each RCA result in `s3://bucket/rca-results/results_YYYYMMDD_HHMMSS.json`:
   "log_source": "s3://bucket/raw/app_api_20260316.log",
   "severity": "High",
   "summary": "PostgreSQL connection pool exhaustion causing API 503 errors",
-  "root_cause": "Max connections (100) exceeded due to connection leak in ORM session management. Connections not properly closed after exception handling in user_service.py:L247.",
-  "immediate_fix": "1. Restart API pods to reset connection pool\n2. Apply connection timeout (30s) via ConfigMap\n3. Deploy hotfix with explicit session.close() in finally block",
+  "root_cause": "Max connections (100) exceeded due to connection leak in ORM session management.",
+  "immediate_fix": "1. Restart API pods\n2. Apply connection timeout (30s)\n3. Deploy hotfix with session.close()",
   "preventive_measures": [
-    "Implement connection pool monitoring alerts (threshold: 80%)",
+    "Implement connection pool monitoring alerts",
     "Add circuit breaker pattern for database calls",
     "Enable pgBouncer connection pooling layer"
   ],
@@ -600,6 +673,8 @@ Each RCA result in `s3://bucket/rca-results/results_YYYYMMDD_HHMMSS.json`:
   "mlflow_run_id": "a3f2c1b0d9e8f7a6b5c4d3e2f1a0b9c8",
   "attempts": 2,
   "final_score": 0.85,
+  "status": "approved",
+  "approved_by": "sre_ananya",
   "metrics": {
     "faithfulness": 0.89,
     "answer_relevancy": 0.87,
@@ -611,680 +686,181 @@ Each RCA result in `s3://bucket/rca-results/results_YYYYMMDD_HHMMSS.json`:
   "rag_context": [
     "runbook/database/connection_pool_tuning.md",
     "runbook/kubernetes/pod_restart_procedures.md"
-  ],
-  "status": "success"
+  ]
 }
-```
-
-### Output Schema Validation
-
-```mermaid
-graph LR
-    subgraph "Agent Pipeline Output"
-        FORMATTER["Formatter Agent<br/>Structured JSON"]
-    end
-    
-    subgraph "Validation Layer"
-        SCHEMA["Pydantic Model<br/>RCAOutput"]
-        CHECKS["Field Validation<br/>• UUID format<br/>• Severity enum<br/>• Score range [0,1]<br/>• Required fields"]
-    end
-    
-    subgraph "Storage"
-        S3["S3 rca-results/<br/>Immutable storage"]
-        METADATA["Airflow XCom<br/>Task metadata"]
-    end
-    
-    FORMATTER --> SCHEMA
-    SCHEMA --> CHECKS
-    CHECKS -->|"Valid"| S3
-    CHECKS -->|"Valid"| METADATA
-    CHECKS -->|"Invalid"| ERROR["Raise ValidationError<br/>Retry with feedback"]
-    
-    style CHECKS fill:#4a3a1a,color:#fff
-    style ERROR fill:#4a1a1a,color:#fff
 ```
 
 ---
 
 ## LLMOps: Experiment Tracking & Observability
 
-### MLflow Integration Architecture
+Every RCA execution is tracked in **MLflow (DagsHub backend)**. Human verdicts are written back to the original MLflow run as tags post-review, enabling correlation between AI critic scores and SRE-assessed quality over time.
 
-```mermaid
-graph TB
-    subgraph "Airflow Worker"
-        TASK["RCA Task Execution"]
-        TRACKER["MLflow Client<br/>tracker.py"]
-    end
-    
-    subgraph "MLflow Tracking Server (DagsHub)"
-        BACKEND["PostgreSQL Backend<br/>Experiment metadata"]
-        ARTIFACTS["S3 Artifact Store<br/>Model outputs"]
-        UI["MLflow UI<br/>Experiment comparison"]
-    end
-    
-    subgraph "Logged Metrics per RCA Run"
-        PARAMS["Parameters<br/>• model_name<br/>• temperature<br/>• max_tokens<br/>• chunk_k"]
-        METRICS["Metrics<br/>• attempt_N_score<br/>• final_critic_score<br/>• faithfulness<br/>• answer_relevancy<br/>• token_count<br/>• latency_ms<br/>• cost_usd"]
-        ARTIFACTS_LOG["Artifacts<br/>• rca_output.json<br/>• critic_feedback.txt<br/>• retrieved_context.md<br/>• prompt_templates/"]
-    end
-    
-    TASK --> TRACKER
-    TRACKER -->|"mlflow.log_param()"| PARAMS
-    TRACKER -->|"mlflow.log_metric()"| METRICS
-    TRACKER -->|"mlflow.log_artifact()"| ARTIFACTS_LOG
-    
-    PARAMS --> BACKEND
-    METRICS --> BACKEND
-    ARTIFACTS_LOG --> ARTIFACTS
-    
-    BACKEND --> UI
-    ARTIFACTS --> UI
-    
-    style TRACKER fill:#1a4a2e,color:#fff
-    style UI fill:#1a3a5c,color:#fff
-```
+**Tracked per run:**
 
-### Tracked Telemetry per RCA Execution
-
-**Parameters (Hyperparameters)**
-- `model_name`: Llama 3 8B or 70B (auto-selected by log size) / Mistral 7B (critic)
-- `temperature`: 0.0 (deterministic) to 1.0 (creative)
-- `max_tokens`: Response length limit
-- `chunk_k`: RAG retrieval count
-- `quality_threshold`: Critic acceptance score
-
-**Metrics (Performance)**
-- `attempt_1_score`, `attempt_2_score`: Per-iteration critic scores
-- `final_critic_score`: Accepted RCA quality (0.0-1.0)
-- `faithfulness`: DeepEval groundedness metric
-- `answer_relevancy`: DeepEval relevance to query
-- `total_tokens`: Input + output token count
-- `inference_latency_ms`: End-to-end LLM call duration
-- `cost_usd`: Bedrock API cost (tokens × pricing)
-
-**Artifacts (Outputs)**
-- `rca_output.json`: Final structured RCA result
-- `critic_feedback.txt`: Quality assessment reasoning
-- `retrieved_context.md`: RAG chunks used in prompt
-- `agent_prompts/`: All 5 agent prompt templates with variables
+- Parameters: `model_name`, `temperature`, `max_tokens`, `chunk_k`, `quality_threshold`
+- Metrics: `attempt_N_score`, `final_critic_score`, `faithfulness`, `answer_relevancy`, `total_tokens`, `inference_latency_ms`, `cost_usd`
+- Tags (post-HITL): `human_verdict`, `rater_id`, `feedback_type`
+- Artifacts: `rca_output.json`, `critic_feedback.txt`, `retrieved_context.md`
 
 **Access MLflow UI**: `https://dagshub.com/<username>/InfraMind.mlflow`
 
-### DeepEval LLM-as-Judge Metrics
-
-```mermaid
-graph LR
-    subgraph "Evaluation Pipeline"
-        RCA["Generated RCA Output"]
-        CONTEXT["Retrieved RAG Context"]
-        QUERY["Original Log Query"]
-        
-        EVAL1["FaithfulnessMetric<br/>Hallucination detection"]
-        EVAL2["AnswerRelevancyMetric<br/>Query alignment"]
-        EVAL3["ContextualRecallMetric<br/>Context utilization"]
-        
-        JUDGE["Mistral 7B<br/>LLM-as-Judge<br/>(Critic Agent)"]
-        SCORES["Normalized Scores<br/>0.0 - 1.0"]
-    end
-    
-    RCA --> EVAL1
-    CONTEXT --> EVAL1
-    RCA --> EVAL2
-    QUERY --> EVAL2
-    RCA --> EVAL3
-    CONTEXT --> EVAL3
-    
-    EVAL1 --> JUDGE
-    EVAL2 --> JUDGE
-    EVAL3 --> JUDGE
-    
-    JUDGE --> SCORES
-    SCORES -."Log to MLflow".-> MLFLOW[("MLflow Tracking")]
-    
-    style JUDGE fill:#4a1a5c,color:#fff
-    style MLFLOW fill:#1a4a2e,color:#fff
-```
-
----
-
-## Supported Log Formats & Parsers
-
-### Multi-Format Normalization Pipeline
-
-```mermaid
-graph LR
-    subgraph "Raw Log Formats"
-        K8S["Kubernetes<br/>kubelet, kube-apiserver<br/>Structured JSON"]
-        CW["CloudWatch<br/>JSON exports<br/>Nested fields"]
-        RDS["RDS / PostgreSQL<br/>Error logs<br/>Plaintext"]
-        APP["Application Logs<br/>JSON structured<br/>Custom schemas"]
-        SYSLOG["Syslog<br/>RFC 3164/5424<br/>Plaintext"]
-    end
-    
-    subgraph "Normalizer (core/normalizer.py)"
-        DETECT["Format Detection<br/>Regex + heuristics"]
-        PARSE["Parser Dispatch<br/>Format-specific logic"]
-        NORM["Normalized Schema<br/>timestamp, level, message, metadata"]
-    end
-    
-    K8S --> DETECT
-    CW --> DETECT
-    RDS --> DETECT
-    APP --> DETECT
-    SYSLOG --> DETECT
-    
-    DETECT --> PARSE
-    PARSE --> NORM
-    
-    NORM --> OUTPUT["Standardized JSON<br/>Ready for LLM ingestion"]
-    
-    style DETECT fill:#4a3a1a,color:#fff
-    style OUTPUT fill:#1a4a2e,color:#fff
-```
-
-### Normalized Output Schema
-
-```json
-{
-  "timestamp": "2026-03-16T17:45:32Z",
-  "level": "ERROR",
-  "source": "app-api-pod-7f8d9c",
-  "message": "Connection pool exhausted: max_connections=100",
-  "metadata": {
-    "namespace": "production",
-    "pod_ip": "10.0.1.42",
-    "error_code": "SQLSTATE[08006]"
-  },
-  "raw_log": "<original log line>"
-}
-```
-
-**Supported Formats**:
-- **Kubernetes**: `kubelet`, `kube-apiserver`, `kube-scheduler` (JSON)
-- **CloudWatch**: Exported JSON logs with nested `@timestamp`, `@message`
-- **RDS**: PostgreSQL error logs, MySQL slow query logs
-- **Application**: JSON structured logs (Logstash, Fluentd, Winston)
-- **Syslog**: RFC 3164 (BSD) and RFC 5424 (IETF) formats
-
----
-
-## Prompt Engineering & Agent Design
-
-### Agent Prompt Template Architecture
-
-```mermaid
-graph TB
-    subgraph "Prompt Templates (prompts/)"
-        INV["investigator.txt<br/>Extract incident details"]
-        ROOT["root_cause.txt<br/>Hypothesis generation"]
-        FIX["fix_generator.txt<br/>Remediation steps"]
-        FMT["formatter.txt<br/>JSON structuring"]
-        CRIT["critic.txt<br/>Quality assessment"]
-    end
-    
-    subgraph "Prompt Variables"
-        VARS["Jinja2 Templating<br/>• {{log_content}}<br/>• {{rag_context}}<br/>• {{previous_output}}<br/>• {{critic_feedback}}"]
-    end
-    
-    subgraph "LangChain Prompt Chain"
-        CHAIN["PromptTemplate<br/>+ ChatPromptTemplate<br/>+ SystemMessage"]
-    end
-    
-    INV --> VARS
-    ROOT --> VARS
-    FIX --> VARS
-    FMT --> VARS
-    CRIT --> VARS
-    
-    VARS --> CHAIN
-    CHAIN --> BEDROCK["AWS Bedrock<br/>Llama 3 8B / 70B + Mistral 7B"]
-    
-    style VARS fill:#4a3a1a,color:#fff
-    style BEDROCK fill:#1a3a5c,color:#fff
-```
-
-### Example: Root Cause Agent Prompt
-
-```markdown
-# ROLE
-You are an expert SRE analyzing infrastructure incidents.
-
-# TASK
-Given the incident summary and retrieved runbook context, generate a detailed root cause hypothesis.
-
-# INPUT
-## Incident Summary
-{{incident_summary}}
-
-## Retrieved Runbook Context
-{{rag_context}}
-
-## Previous Attempt Feedback (if retry)
-{{critic_feedback}}
-
-# OUTPUT FORMAT
-Provide:
-1. Root cause hypothesis (2-3 sentences)
-2. Supporting evidence from logs
-3. Confidence level (0.0-1.0)
-
-# CONSTRAINTS
-- Base analysis ONLY on provided context
-- Cite specific log lines or runbook sections
-- If uncertain, state assumptions explicitly
-```
-
-### Prompt Optimization Techniques
-
-| Technique | Implementation | Benefit |
-|-----------|----------------|----------|
-| **Few-shot examples** | Include 2-3 example RCAs in system prompt | Improves output structure consistency |
-| **Chain-of-thought** | "Think step-by-step" instruction | Better reasoning for complex failures |
-| **Role prompting** | "You are an expert SRE..." | Activates domain-specific knowledge |
-| **Output constraints** | JSON schema in prompt | Reduces parsing errors |
-| **Context injection** | RAG chunks + previous outputs | Grounds LLM in factual data |
-
----
-
-## Cost Optimization & Token Management
-
-### Token Usage Breakdown
-
-```mermaid
-graph TB
-    subgraph "Per-RCA Token Budget"
-        INPUT["Input Tokens<br/>• Log content: ~500<br/>• RAG context: ~3000<br/>• Prompt template: ~800<br/>• Previous outputs: ~1500<br/>Total: ~5800"]
-        
-        OUTPUT["Output Tokens<br/>• Investigator: ~500<br/>• Root Cause: ~800<br/>• Fix Generator: ~600<br/>• Formatter: ~400<br/>• Critic: ~200<br/>Total: ~2500"]
-    end
-    
-    subgraph "Cost Calculation"
-        LLAMA8["Llama 3 8B<br/>Input: $0.0003/1K<br/>Output: $0.0006/1K"]
-        LLAMA70["Llama 3 70B<br/>Input: $0.00265/1K<br/>Output: $0.0035/1K"]
-        MISTRAL["Mistral 7B<br/>Critic only<br/>Low token count"]
-        
-        COST["Per-RCA Cost<br/>8B path: ~$0.003<br/>70B path: ~$0.018<br/>Avg mixed: ~$0.010"]
-    end
-    
-    INPUT --> LLAMA8
-    OUTPUT --> LLAMA8
-    INPUT --> LLAMA70
-    OUTPUT --> LLAMA70
-    INPUT --> MISTRAL
-    OUTPUT --> MISTRAL
-    
-    LLAMA8 --> COST
-    LLAMA70 --> COST
-    MISTRAL --> COST
-    
-    style LLAMA8 fill:#1a3a5c,color:#fff
-    style LLAMA70 fill:#1a3a5c,color:#fff
-    style MISTRAL fill:#4a1a5c,color:#fff
-    style COST fill:#1a4a2e,color:#fff
-```
-
-### Cost Optimization Strategies
-
-**1. Dynamic Model Selection**
-- **Investigator, Root Cause, Fix Generator, Formatter**: Llama 3 8B for short logs (≤ 2000 chars), Llama 3 70B for long logs — decided automatically at runtime
-- **Critic**: Always Mistral 7B
-
-**2. Context Window Management** — logs are truncated at 2000 characters (the model-selection threshold), and RAG retrieval is capped at top-6 chunks.
-
-**3. Response Caching** (Dev/Test) — LLM responses are cached by prompt hash to avoid redundant Bedrock calls during development.
-
-**4. Batch Processing**
-- Process multiple logs in parallel (Airflow dynamic task mapping)
-- Amortize RAG indexing cost across batch
-
-**Monthly Cost Estimate** (1000 logs/month, 2 retries avg, mixed 8B/70B):
-
-1000 logs × 2 attempts × ~$0.010 avg = **~$20/month** in LLM costs, plus ~$5/month S3 and free-tier DagsHub MLflow — roughly **$25/month total** for self-hosted.
-
----
-
-## Monitoring & Observability
-
-### Metrics Collection Architecture
-
-```mermaid
-graph TB
-    subgraph "Airflow Metrics"
-        DAG_METRICS["DAG Metrics<br/>• dag_run_duration<br/>• task_success_rate<br/>• pool_utilization"]
-        STATSD["StatsD Exporter<br/>UDP :8125"]
-    end
-    
-    subgraph "Custom Application Metrics"
-        APP_METRICS["Python Metrics<br/>• rca_attempts_total<br/>• critic_score_histogram<br/>• token_usage_counter<br/>• bedrock_latency_summary"]
-        PROM_CLIENT["Prometheus Client<br/>prometheus_client.py"]
-    end
-    
-    subgraph "Prometheus"
-        PROM[("Prometheus<br/>:9090<br/>Time-series DB")]
-        SCRAPE["Scrape Targets<br/>• Airflow :8080/metrics<br/>• App :8000/metrics"]
-    end
-    
-    subgraph "Grafana"
-        DASH["InfraMind Dashboard<br/>• RCA success rate<br/>• Token cost trends<br/>• Latency percentiles<br/>• Critic score distribution"]
-    end
-    
-    DAG_METRICS --> STATSD
-    STATSD --> PROM
-    APP_METRICS --> PROM_CLIENT
-    PROM_CLIENT --> PROM
-    SCRAPE --> PROM
-    PROM --> DASH
-    
-    style PROM fill:#4a1a1a,color:#fff
-    style DASH fill:#1a3a5c,color:#fff
-```
-
-### Key Performance Indicators (KPIs)
+### Key Performance Indicators
 
 | Metric | Target | Alert Threshold |
-|--------|--------|------------------|
-| **RCA Success Rate** | ≥ 95% | < 90% |
-| **Avg Critic Score** | ≥ 0.85 | < 0.75 |
-| **P95 Latency** | ≤ 30s | > 60s |
-| **Token Cost/RCA** | ≤ $0.02 | > $0.05 |
-| **ChromaDB Query Time** | ≤ 500ms | > 2s |
-| **Faithfulness Score** | ≥ 0.80 | < 0.70 |
-
-### Grafana Dashboard Panels
-
-See `monitoring/grafana/dashboards/inframind.json` for full configuration.
-
-**Panel Highlights**:
-1. **RCA Pipeline Throughput**: Logs processed per hour
-2. **Multi-Agent Latency Breakdown**: Time spent per agent
-3. **Token Usage Heatmap**: Cost distribution by hour/day
-4. **Critic Score Distribution**: Quality histogram
-5. **RAG Retrieval Accuracy**: Context relevance metrics
-6. **Bedrock API Errors**: Rate limiting, throttling events
+|--------|--------|-----------------|
+| RCA Success Rate | ≥ 95% | < 90% |
+| Avg AI Critic Score | ≥ 0.85 | < 0.75 |
+| SRE Approval Rate | ≥ 80% | < 60% |
+| P95 Latency | ≤ 30s | > 60s |
+| Token Cost/RCA | ≤ $0.02 | > $0.05 |
+| Faithfulness Score | ≥ 0.80 | < 0.70 |
 
 ---
 
-## Troubleshooting & Debugging
+## Cost Estimate
 
-### Common Issues
+**Monthly (1000 logs/month, 2 retries avg, 50/50 8B/70B split):**
 
-#### 1. ChromaDB Collection Not Found
+| Component | Cost |
+|-----------|------|
+| Llama 3 8B — 500 logs × 2 × 6000 tokens | $1.80 |
+| Llama 3 70B — 500 logs × 2 × 6000 tokens | $15.90 |
+| Mistral 7B critic — 1000 × 2 × 2000 tokens | $0.80 |
+| Titan Embed v2 RAG queries | $0.10 |
+| S3 storage | $1.27 |
+| Step Functions — 5 transitions × 1000 executions | $0.13 |
+| Lambda invocations | ~$0.50 |
+| DynamoDB on-demand | ~$0.10 |
+| **Total (self-hosted Airflow)** | **~$21/month** |
+| Total (Astro Cloud) | ~$196/month |
 
-**Symptom**: `ValueError: Collection 'runbook_embeddings' does not exist`
+---
 
-**Solution**:
+## Troubleshooting
+
+### ChromaDB Collection Not Found
+
 ```bash
-# Force rebuild vector index
 docker exec $(docker ps --format "{{.Names}}" | grep scheduler) \
   airflow variables set INFRAMIND_FORCE_REBUILD true
-
-# Trigger DAG to rebuild
 docker exec $(docker ps --format "{{.Names}}" | grep scheduler) \
   airflow dags trigger inframind_rca_pipeline
 ```
 
-#### 2. Bedrock Throttling (429 Errors)
+### Bedrock Throttling (429 Errors)
 
-**Symptom**: `botocore.exceptions.ClientError: ThrottlingException`
+Add exponential backoff in `core/bedrock_client.py`:
 
-**Solution**:
 ```python
-# Add exponential backoff in core/bedrock_client.py
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=4, max=10)
-)
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def invoke_model(self, prompt):
-    # ... existing code
+    ...
 ```
 
-#### 3. Low Critic Scores (< 0.8)
+### Step Functions AccessDenied
 
-**Symptom**: RCA retries exhausted, final score below threshold
+Confirm your Airflow IAM user has `states:StartExecution` on the state machine ARN. Then verify `SF_STATE_MACHINE_ARN` is set in both `.env` and Airflow variables.
 
-**Diagnosis**:
-```bash
-# Check MLflow run for detailed metrics
-mlflow ui --backend-store-uri $MLFLOW_TRACKING_URI
+### HITL Task Token Expired
 
-# Review critic feedback
-cat logs/rca_critic_feedback_<run_id>.txt
-```
+Step Functions task tokens expire after 1 year but the heartbeat timeout is 72 hours. If no SRE action is taken within 72 hours, the `EscalateTimeout` state runs `OnReject` automatically with `feedback_type: timeout`.
 
-**Solutions**:
-- Improve RAG context: Add more runbooks to `runbook/`
-- Tune chunk_k: Increase from 6 to 10 in `config/settings.yaml`
-- Force 70B: Set `log_size_threshold: 0` in `config/settings.yaml` to always use Llama 3 70B
+### Low AI Critic Scores (< 0.8)
 
-#### 4. High Token Costs
-
-**Symptom**: Monthly bill exceeds budget
-
-**Mitigation**:
 ```yaml
-# config/settings.yaml
-pipeline:
-  max_retries: 1  # Reduce from 2
-  quality_threshold: 0.75  # Lower from 0.8
-
+# config/settings.yaml — temporary mitigation
 vectordb:
-  chunk_k: 4  # Reduce from 6
+  chunk_k: 10        # increase from 6
+pipeline:
+  quality_threshold: 0.75   # lower acceptance bar while adding runbooks
 ```
 
 ### Debug Mode
 
 ```bash
-# Enable verbose logging
 docker exec $(docker ps --format "{{.Names}}" | grep scheduler) \
   airflow variables set INFRAMIND_LOG_LEVEL DEBUG
-
-# Tail scheduler logs
 docker logs -f $(docker ps --format "{{.Names}}" | grep scheduler) | grep InfraMind
-
-# Inspect task logs in Airflow UI
-# http://localhost:8080 → DAGs → inframind_rca_pipeline → Graph → Click task → Logs
 ```
 
 ---
 
-## Roadmap & Future Enhancements
+## Prompt Engineering
 
-### Q2 2026
-- [ ] **Fine-tuned Critic Model**: RLHF on human feedback data
-- [ ] **Streaming RCA**: Real-time log ingestion via Kinesis
-- [ ] **Multi-modal Analysis**: Image support (Grafana screenshots, architecture diagrams)
+Each agent uses a Jinja2 template in `prompts/`. Key variables injected per call:
 
-### Q3 2026
-- [ ] **Agentic Remediation**: Auto-execute fixes via Ansible/Terraform
-- [ ] **Federated Learning**: Cross-tenant model improvements (privacy-preserving)
-- [ ] **Graph RAG**: Knowledge graph for incident correlation
+| Variable | Source | Used by |
+|----------|--------|---------|
+| `{{log_content}}` | Normalized log | Investigator |
+| `{{rag_context}}` | ChromaDB top-6 chunks | All agents |
+| `{{previous_output}}` | Prior agent output | Root Cause, Fix Generator |
+| `{{critic_feedback}}` | AI critic text | Investigator (on retry) |
+| `{{feedback_history}}` | Embedded `# ===` sections in log | Investigator (on HITL rejection retry) |
 
-### Q4 2026
-- [ ] **Causal Inference**: Bayesian networks for root cause ranking
-- [ ] **Explainable AI**: SHAP values for LLM decision transparency
+The investigator prompt explicitly instructs: *"If the log contains lines starting with `# ===`, treat them as previous analysis context and human corrections. Do NOT repeat a rejected root cause. Re-examine raw log evidence independently to verify any provided correction."*
 
 ---
-
-
 
 ## Appendix
 
-### A. Prompt Template Examples
+### A. MLflow Experiment Schema
 
-**Investigator Agent** (`prompts/investigator.txt`):
-```
-You are an expert Site Reliability Engineer analyzing infrastructure logs.
-
-TASK: Extract key incident details from the provided log.
-
-LOG CONTENT:
-{{log_content}}
-
-RUNBOOK CONTEXT:
-{{rag_context}}
-
-OUTPUT FORMAT (JSON):
-{
-  "timestamp": "ISO 8601 timestamp of first error",
-  "severity": "Critical|High|Medium|Low",
-  "affected_components": ["list of impacted services/pods/nodes"],
-  "error_patterns": ["list of recurring error messages"],
-  "summary": "2-3 sentence incident description"
-}
-
-CONSTRAINTS:
-- Base analysis ONLY on provided log content
-- Do not speculate beyond available data
-- If severity is unclear, default to "Medium"
-```
-
-### B. MLflow Experiment Schema
-
-**Run Parameters**:
 ```python
 mlflow.log_params({
     "model_name": "meta.llama3-8b-instruct-v1:0",
-    "temperature": 0.1,
-    "max_tokens": 2048,
-    "chunk_k": 6,
-    "quality_threshold": 0.8,
-    "max_retries": 2,
-    "log_source": "s3://bucket/raw/app.log"
+    "temperature": 0.1, "max_tokens": 2048,
+    "chunk_k": 6, "quality_threshold": 0.8, "max_retries": 2
 })
-```
-
-**Run Metrics**:
-```python
 mlflow.log_metrics({
-    "attempt_1_score": 0.72,
-    "attempt_2_score": 0.86,
-    "final_critic_score": 0.86,
-    "faithfulness": 0.89,
-    "answer_relevancy": 0.84,
-    "contextual_recall": 0.81,
-    "total_tokens": 8234,
-    "input_tokens": 5821,
-    "output_tokens": 2413,
-    "inference_latency_ms": 24567,
-    "cost_usd": 0.0147
+    "attempt_1_score": 0.72, "attempt_2_score": 0.86,
+    "final_critic_score": 0.86, "faithfulness": 0.89,
+    "answer_relevancy": 0.84, "total_tokens": 8234,
+    "inference_latency_ms": 24567, "cost_usd": 0.0147
 })
-```
-
-**Run Tags**:
-```python
+# Written post-HITL review by OnApprove / OnReject Lambda
 mlflow.set_tags({
-    "incident_id": "550e8400-e29b-41d4-a716-446655440000",
-    "severity": "High",
-    "status": "success",
-    "dag_run_id": "manual__2026-03-16T17:55:19+00:00"
+    "human_verdict": "approved",   # or "rejected"
+    "rater_id": "sre_ananya",
+    "feedback_type": "wrong_rc"    # only on rejection
 })
 ```
 
-### C. ChromaDB Collection Metadata
-
-```python
-# Collection schema
-collection = chroma_client.get_or_create_collection(
-    name="runbook_embeddings",
-    metadata={
-        "hnsw:space": "cosine",
-        "hnsw:construction_ef": 200,
-        "hnsw:search_ef": 100,
-        "hnsw:M": 16
-    },
-    embedding_function=bedrock_embed_fn
-)
-
-# Document metadata structure
-metadata = {
-    "source": "runbook/database/connection_pool_tuning.md",
-    "chunk_index": 3,
-    "total_chunks": 12,
-    "category": "database",
-    "last_updated": "2026-03-15T10:30:00Z",
-    "author": "sre-team"
-}
-```
-
-### D. Airflow Variable Reference
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `INFRAMIND_S3_BUCKET` | String | — | S3 bucket name (required) |
-| `INFRAMIND_S3_PREFIX` | String | `raw/` | Log file prefix |
-| `INFRAMIND_MAX_LOGS` | Integer | `3` | Max logs per DAG run |
-| `INFRAMIND_FORCE_REBUILD` | Boolean | `false` | Rebuild ChromaDB index |
-| `INFRAMIND_SLACK_WEBHOOK` | String | — | Slack notification URL |
-| `INFRAMIND_ENABLE_CACHE` | Boolean | `true` | Cache LLM responses |
-| `INFRAMIND_LOG_LEVEL` | String | `INFO` | Logging verbosity |
-| `INFRAMIND_TIMEOUT` | Integer | `300` | Task timeout (seconds) |
-| `INFRAMIND_RETRY_DELAY` | Integer | `60` | Retry delay (seconds) |
-
-### E. Cost Breakdown Example
-
-**Scenario**: 1000 logs/month, 2 attempts average, mixed Haiku/Sonnet
-
-```
-LLM Inference (50% 8B / 50% 70B split):
-  - Agents 1-4 via Llama 3 8B (500 logs): 500 × 2 × 6000 tokens × $0.0003/1K = $1.80
-  - Agents 1-4 via Llama 3 70B (500 logs): 500 × 2 × 6000 tokens × $0.00265/1K = $15.90
-  - Critic via Mistral 7B (all logs): 1000 × 2 × 2000 tokens × $0.0002/1K = $0.80
-  Subtotal: ~$18.50
-
-Embeddings (Titan Embed v2):
-  - RAG queries: 1000 × 2 × 500 tokens × $0.0001/1K = $0.10
-  - Runbook indexing (one-time): ~$0.03
-  Subtotal: $0.13
-
-S3 Storage:
-  - Processed logs + RCA results: ~$1.27
-  Subtotal: $1.27
-
-Airflow (Astro Cloud - optional): $175/month (or $0 for self-hosted)
-MLflow (DagsHub): Free tier — $0
-
-TOTAL (Self-hosted): ~$20/month
-TOTAL (Astro Cloud): ~$195/month
-```
-
-### F. Glossary
+### B. Glossary
 
 | Term | Definition |
 |------|------------|
-| **RAG** | Retrieval-Augmented Generation - LLM technique combining vector search with generation |
-| **HNSW** | Hierarchical Navigable Small World - graph-based approximate nearest neighbor algorithm |
-| **LLMOps** | LLM Operations - practices for deploying and managing LLM systems in production |
-| **RLHF** | Reinforcement Learning from Human Feedback - fine-tuning method using human preferences |
+| **RAG** | Retrieval-Augmented Generation — LLM technique combining vector search with generation |
+| **HITL** | Human-in-the-Loop — human review gate integrated into an automated pipeline |
+| **HNSW** | Hierarchical Navigable Small World — graph-based approximate nearest neighbor algorithm |
+| **LLMOps** | LLM Operations — practices for deploying and managing LLM systems in production |
+| **RLHF** | Reinforcement Learning from Human Feedback — fine-tuning using human preferences |
 | **Faithfulness** | Metric measuring if LLM output is grounded in provided context (no hallucinations) |
 | **Answer Relevancy** | Metric measuring if LLM output addresses the original query |
-| **Contextual Recall** | Metric measuring if LLM utilized all relevant information from context |
-| **Critic Agent** | LLM agent that evaluates quality of other agents' outputs |
-| **Self-Correction Loop** | Iterative refinement process where critic feedback improves subsequent attempts |
+| **Critic Agent** | LLM agent (Mistral 7B) that evaluates quality of other agents' outputs |
+| **Self-Correction Loop** | Iterative refinement where critic feedback improves subsequent attempts |
+| **waitForTaskToken** | Step Functions mechanism that pauses a state machine until an external signal resumes it |
 | **XCom** | Airflow's cross-communication mechanism for passing data between tasks |
-| **DAG** | Directed Acyclic Graph - Airflow's workflow definition structure |
+| **DAG** | Directed Acyclic Graph — Airflow's workflow definition structure |
 
 ---
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
 ## Citation
 
-If you use InfraMind in your research or production systems, please cite:
-
 ```bibtex
 @software{inframind2026,
   author = {Nasim Raj Laskar},
-  title = {InfraMind: Autonomous Root Cause Analysis with Multi-Agent LLMs},
-  year = {2026},
-  url = {https://github.com/nasim-raj-laskar/InfraMind},
-  note = {LLMOps platform for infrastructure incident triage}
+  title  = {InfraMind: Autonomous Root Cause Analysis with Multi-Agent LLMs and Human-in-the-Loop Review},
+  year   = {2026},
+  url    = {https://github.com/nasim-raj-laskar/InfraMind}
 }
 ```
 
@@ -1294,15 +870,10 @@ If you use InfraMind in your research or production systems, please cite:
 
 - **Issues**: [GitHub Issues](https://github.com/nasim-raj-laskar/InfraMind/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/nasim-raj-laskar/InfraMind/discussions)
-- **Email**: nasim.raj.laskar@example.com
 - **LinkedIn**: [Nasim Raj Laskar](https://linkedin.com/in/nasim-raj-laskar)
 
 ---
 
 **Built with ❤️ for SRE teams fighting alert fatigue**
 
----
-
-**Last Updated**: March 16, 2026  
-**Version**: 1.0.0  
-**Maintainer**: Nasim Raj Laskar
+**Last Updated**: April 2026 · **Version**: 2.0.0 · **Maintainer**: Nasim Raj Laskar
