@@ -15,77 +15,8 @@ flowchart LR
 
 ## System Architecture
 
-```mermaid
-flowchart TB
-    subgraph INGEST["Data Ingestion · Airflow DAG"]
-        LOGS["S3 raw/"] --> FETCH["fetch_logs"] --> NORM["normalize_logs"] --> NORM_OUT["Normalized JSON"]
-    end
-
-    subgraph RAG["RAG Knowledge Base"]
-        RUNBOOKS["Markdown Runbooks"] --> EMBED["Titan Embed v2"] --> CHROMA[("ChromaDB")]
-        CHROMA -->|"cosine search · top-6 · MMR rerank"| CONTEXT["Augmented Context"]
-    end
-
-    subgraph MODEL["Dynamic Model Selection"]
-        CHECK{"Log > 2000 chars?"}
-        CHECK -->|No| L8["Llama 3 8B"]
-        CHECK -->|Yes| L70["Llama 3 70B"]
-    end
-
-    subgraph AGENTS["Multi-Agent Pipeline · AWS Bedrock"]
-        A1["1 Investigator"] --> A2["2 Root Cause"] --> A3["3 Fix Generator"] --> A4["4 Formatter"]
-        A4 --> CRITIC{"5 Critic · Mistral 7B<br/>Score ≥ 0.8?"}
-        CRITIC -->|"No · inject feedback"| A1
-        CRITIC -->|Max retries| FAIL["FAILED"]
-    end
-
-    subgraph HITL["Human-in-the-Loop · AWS Step Functions"]
-        SF["trigger_sf_review<br/>fire and forget"]
-        STORE["StoreForReview Lambda<br/>DynamoDB + task token"]
-        WAIT["WaitForTaskToken<br/>paused · zero cost"]
-        UI["ReviewUI Lambda<br/>API Gateway · SRE queue"]
-        APPROVE["OnApprove Lambda<br/>S3 move · MLflow tag"]
-        REJECT["OnReject Lambda<br/>feedback-in-log · raw/"]
-        SF --> STORE --> WAIT
-        WAIT -->|"SRE approves"| APPROVE
-        WAIT -->|"SRE rejects + feedback"| REJECT
-        REJECT -->|"next DAG run picks up"| LOGS
-    end
-
-    subgraph OBS["Observability"]
-        MLFLOW["MLflow <br/> DagsHub"]
-        DEEPEVAL["DeepEval"]
-        GRAFANA["Grafana"]
-    end
-
-    NORM_OUT --> CHECK
-    NORM_OUT -->|query embedding| CHROMA
-    L8 & L70 -->|LLM inference| A1
-    CONTEXT -->|injected into prompts| A1
-    CRITIC -->|pass| SF
-    AGENTS -->|telemetry| MLFLOW
-    AGENTS -->|eval| DEEPEVAL
-    DEEPEVAL --> MLFLOW
-    MLFLOW --> GRAFANA
-
-    classDef teal fill:#0F6E56,color:#E1F5EE,stroke:#085041
-    classDef blue fill:#185FA5,color:#E6F1FB,stroke:#0C447C
-    classDef purple fill:#534AB7,color:#EEEDFE,stroke:#3C3489
-    classDef coral fill:#993C1D,color:#FAECE7,stroke:#712B13
-    classDef amber fill:#854F0B,color:#FAEEDA,stroke:#633806
-    classDef green fill:#3B6D11,color:#EAF3DE,stroke:#27500A
-    classDef red fill:#A32D2D,color:#FCEBEB,stroke:#791F1F
-    classDef hitl fill:#185FA5,color:#E6F1FB,stroke:#0C447C
-
-    class LOGS,FETCH,NORM,NORM_OUT teal
-    class RUNBOOKS,EMBED,CHROMA,CONTEXT blue
-    class CHECK,L8,L70 amber
-    class A1,A2,A3,A4 purple
-    class CRITIC coral
-    class FAIL red
-    class SF,STORE,WAIT,UI,APPROVE,REJECT hitl
-    class MLFLOW,DEEPEVAL,GRAFANA green
-```
+![](assets/low-arch.png)
+---
 
 ### Multi-Agent Workflow with Self-Correction
 
