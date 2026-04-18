@@ -501,49 +501,7 @@ chmod +x restart.sh
 
 Both scripts stop existing containers, start Astro, wait for the scheduler, then apply pools and Airflow variables automatically.
 
-### 7. Set Airflow Variables
-
-```bash
-SCHEDULER=$(docker ps --format "{{.Names}}" | grep scheduler)
-
-docker exec $SCHEDULER airflow variables set INFRAMIND_S3_BUCKET your-bucket-name
-docker exec $SCHEDULER airflow variables set INFRAMIND_S3_PREFIX raw/
-docker exec $SCHEDULER airflow variables set INFRAMIND_MAX_LOGS 3
-docker exec $SCHEDULER airflow variables set INFRAMIND_FORCE_REBUILD false
-docker exec $SCHEDULER airflow variables set SF_STATE_MACHINE_ARN arn:aws:states:ap-south-1:YOUR_ACCOUNT:stateMachine:InfraMind-HITL
-```
-
-### 8. Verify Deployment
-
-```bash
-# Check container health
-docker ps --filter "name=inframind"
-
-# View scheduler logs
-docker logs -f $(docker ps --format "{{.Names}}" | grep scheduler)
-
-# Test ChromaDB persistence
-docker exec $(docker ps --format "{{.Names}}" | grep scheduler) \
-  python -c "from core.vectordb import VectorDB; db = VectorDB(); print(db.collection.count())"
-
-# Test Step Functions connection
-docker exec $(docker ps --format "{{.Names}}" | grep scheduler) \
-  python -c "
-import boto3, json, os
-sfn = boto3.client('stepfunctions', region_name='ap-south-1')
-r = sfn.start_execution(
-  stateMachineArn=os.environ['SF_STATE_MACHINE_ARN'],
-  name='connection-test-001',
-  input=json.dumps({'rca_output': {'incident_id': 'test-001', 'severity': 'Low',
-    'log_source': 's3://bucket/raw/test.log', 'mlflow_run_id': 'test',
-    'summary': 'test', 'root_cause': 'test', 'immediate_fix': 'test'},
-    'ai_critic': {'score': 0.9, 'reasoning': 'test'}})
-)
-print('SF connection OK:', r['executionArn'])
-"
-```
-
-### 9. Trigger DAG
+### 7. Trigger DAG
 
 **Via Airflow UI**: Navigate to `http://localhost:8080` (admin / admin) → enable `inframind_rca_pipeline` → click Trigger DAG.
 
@@ -661,37 +619,25 @@ Each approved RCA written to `s3://bucket/rca-results/results_<incident_id>.json
 
 ```json
 {
-  "incident_id": "550e8400-e29b-41d4-a716-446655440000",
-  "timestamp": "2026-03-16T17:55:19Z",
-  "log_source": "s3://bucket/raw/app_api_20260316.log",
-  "severity": "High",
-  "summary": "PostgreSQL connection pool exhaustion causing API 503 errors",
-  "root_cause": "Max connections (100) exceeded due to connection leak in ORM session management.",
-  "immediate_fix": "1. Restart API pods<br/>2. Apply connection timeout (30s)<br/>3. Deploy hotfix with session.close()",
-  "preventive_measures": [
-    "Implement connection pool monitoring alerts",
-    "Add circuit breaker pattern for database calls",
-    "Enable pgBouncer connection pooling layer"
-  ],
-  "confidence": 0.91,
-  "model_used": "meta.llama3-8b-instruct-v1:0",
-  "mlflow_run_id": "a3f2c1b0d9e8f7a6b5c4d3e2f1a0b9c8",
-  "attempts": 2,
-  "final_score": 0.85,
-  "status": "approved",
-  "approved_by": "sre_ananya",
-  "metrics": {
-    "faithfulness": 0.89,
-    "answer_relevancy": 0.87,
-    "contextual_recall": 0.82,
-    "total_tokens": 4521,
-    "inference_latency_ms": 3847,
-    "cost_usd": 0.0113
+  "ai_critic": {
+    "score": 8,
+    "reasoning": "The root cause identified in the RCA report is technically correct for the reported error type (TLS handshake timeout). The immediate fix suggested in the report also addresses the root cause by allowing outbound traffic on port 443. However, the severity level seems appropriate for this issue, but it's essential to consider the context, such as the number of affected nodes and the impact on the application, to ensure the severity is accurate."
   },
-  "rag_context": [
-    "runbook/database/connection_pool_tuning.md",
-    "runbook/kubernetes/pod_restart_procedures.md"
-  ]
+  "rca_output": {
+    "raw_log": "{\"timestamp\":\"2024-01-15T10:23:45Z\",\"level\":\"ERROR\",\"service\":\"kubelet\",\"message\":\"Failed to pull image nginx:latest: RPC error: net/http: TLS handshake timeout\"}",
+    "summary": "Outbound 443 blocked causing TLS handshake timeout error",
+    "attempts": 1,
+    "severity": "High",
+    "confidence": 0.9,
+    "log_format": "cloudwatch_json",
+    "model_used": "Llama-3-8B",
+    "root_cause": "Outbound 443 blocked",
+    "incident_id": "10d675cc-fbbc-44b2-a252-c5d81bd106d3",
+    "log_service": "kubelet",
+    "log_severity": "ERROR",
+    "immediate_fix": "Check node's security group configuration to ensure port 443 is allowed for outbound traffic. If not, add an outbound rule to allow traffic on port 443.",
+    "mlflow_run_id": "ea917216426x49afaax8706x5d70e6a"
+  }
 }
 ```
 
@@ -742,57 +688,6 @@ Every RCA execution is tracked in **MLflow (DagsHub backend)**. Human verdicts a
 
 ---
 
-## Troubleshooting
-
-### ChromaDB Collection Not Found
-
-```bash
-docker exec $(docker ps --format "{{.Names}}" | grep scheduler) \
-  airflow variables set INFRAMIND_FORCE_REBUILD true
-docker exec $(docker ps --format "{{.Names}}" | grep scheduler) \
-  airflow dags trigger inframind_rca_pipeline
-```
-
-### Bedrock Throttling (429 Errors)
-
-Add exponential backoff in `core/bedrock_client.py`:
-
-```python
-from tenacity import retry, stop_after_attempt, wait_exponential
-
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def invoke_model(self, prompt):
-    ...
-```
-
-### Step Functions AccessDenied
-
-Confirm your Airflow IAM user has `states:StartExecution` on the state machine ARN. Then verify `SF_STATE_MACHINE_ARN` is set in both `.env` and Airflow variables.
-
-### HITL Task Token Expired
-
-Step Functions task tokens expire after 1 year but the heartbeat timeout is 72 hours. If no SRE action is taken within 72 hours, the `EscalateTimeout` state runs `OnReject` automatically with `feedback_type: timeout`.
-
-### Low AI Critic Scores (< 0.8)
-
-```yaml
-# config/settings.yaml — temporary mitigation
-vectordb:
-  chunk_k: 10        # increase from 6
-pipeline:
-  quality_threshold: 0.75   # lower acceptance bar while adding runbooks
-```
-
-### Debug Mode
-
-```bash
-docker exec $(docker ps --format "{{.Names}}" | grep scheduler) \
-  airflow variables set INFRAMIND_LOG_LEVEL DEBUG
-docker logs -f $(docker ps --format "{{.Names}}" | grep scheduler) | grep InfraMind
-```
-
----
-
 ## Prompt Engineering
 
 Each agent uses a Jinja2 template in `prompts/`. Key variables injected per call:
@@ -809,31 +704,9 @@ The investigator prompt explicitly instructs: *"If the log contains lines starti
 
 ---
 
-## Appendix
 
-### A. MLflow Experiment Schema
 
-```python
-mlflow.log_params({
-    "model_name": "meta.llama3-8b-instruct-v1:0",
-    "temperature": 0.1, "max_tokens": 2048,
-    "chunk_k": 6, "quality_threshold": 0.8, "max_retries": 2
-})
-mlflow.log_metrics({
-    "attempt_1_score": 0.72, "attempt_2_score": 0.86,
-    "final_critic_score": 0.86, "faithfulness": 0.89,
-    "answer_relevancy": 0.84, "total_tokens": 8234,
-    "inference_latency_ms": 24567, "cost_usd": 0.0147
-})
-# Written post-HITL review by OnApprove / OnReject Lambda
-mlflow.set_tags({
-    "human_verdict": "approved",   # or "rejected"
-    "rater_id": "sre_ananya",
-    "feedback_type": "wrong_rc"    # only on rejection
-})
-```
-
-### B. Glossary
+### Glossary
 
 | Term | Definition |
 |------|------------|
