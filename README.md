@@ -1,15 +1,24 @@
-# InfraMind
-![Python](https://img.shields.io/badge/Python-3.11-blue)
-![AWS Stack](https://img.shields.io/badge/AWS%20Stack-Bedrock%20%7C%20Lambda%20%7C%20Step%20Functions%20%7C%20DynamoDB%20%7C%20API%20Gateway%20%7C%20S3-orange)
-![RAG](https://img.shields.io/badge/RAG-Enabled-blueviolet)
-![Multi-Agent](https://img.shields.io/badge/Multi--Agent-System-purple)
-![HITL](https://img.shields.io/badge/Human--in--the--Loop-Enabled-red)
-![MLOps](https://img.shields.io/badge/MLOps-MLflow%20%7C%20DeepEval-blue)
-![Grafana](https://img.shields.io/badge/Grafana-Monitoring-F46800?logo=grafana&logoColor=white)
-![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-E6522C?logo=prometheus&logoColor=white)
-![License](https://img.shields.io/badge/License-Apache-yellow)
-![](assets/high-arch.png)
+<h1 align="center">InfraMind</h1>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11-blue" />
+  <img src="https://img.shields.io/badge/AWS%20Stack-Bedrock%20%7C%20Lambda%20%7C%20Step%20Functions%20%7C%20DynamoDB%20%7C%20API%20Gateway%20%7C%20S3-orange" />
+  <img src="https://img.shields.io/badge/RAG-Enabled-blueviolet" />
+  <img src="https://img.shields.io/badge/Multi--Agent-System-purple" />
+  <img src="https://img.shields.io/badge/Human--in--the--Loop-Enabled-red" />
+  <img src="https://img.shields.io/badge/MLOps-MLflow%20%7C%20DeepEval-blue" />
+  <img src="https://img.shields.io/badge/Grafana-Monitoring-F46800?logo=grafana&logoColor=white" />
+  <img src="https://img.shields.io/badge/Prometheus-Metrics-E6522C?logo=prometheus&logoColor=white" />
+  <img src="https://img.shields.io/badge/License-Apache-yellow" />
+</p>
+
+---
+
+<p align="center">
+  <img src="assets/high-arch.png" />
+</p>
+
+---
 **A production-grade LLMOps platform for autonomous infrastructure root cause analysis (RCA)** — leveraging multi-agent orchestration, retrieval-augmented generation (RAG), self-correcting LLM workflows on AWS Bedrock, and a fully serverless human-in-the-loop (HITL) review layer. Built for SRE/DevOps teams requiring zero-touch incident triage with full observability, experiment tracking, and quality gates.
 
 
@@ -106,49 +115,83 @@ Rather than writing RCA results directly to storage, the pipeline hands off to a
 ```mermaid
 flowchart TB
     subgraph AIRFLOW["Airflow — last task"]
-        TRG["trigger_sf_review<br/>sfn.start_execution()<br/>returns immediately"]
+        TRG["review_sent
+        sfn.start_execution()
+        returns immediately"]
     end
 
     subgraph SF["AWS Step Functions state machine"]
-        STORE["StoreForReview Lambda<br/>writes RCA + task token<br/>to DynamoDB"]
-        WAIT["WaitForTaskToken<br/>paused indefinitely<br/>72h heartbeat timeout"]
-        ROUTE{"RouteDecision"}
+        STORE["StoreForReview Lambda
+        writes RCA + task token to DynamoDB"]
+        WAIT["WaitForTaskToken
+        paused · zero cost · 72h heartbeat"]
         APPROVE["OnApprove Lambda"]
         REJECT["OnReject Lambda"]
-        TIMEOUT["EscalateTimeout<br/>OnReject with<br/>timeout feedback"]
+        TIMEOUT["EscalateTimeout
+        auto-reject after 72h"]
 
         STORE --> WAIT
-        WAIT -->|"send_task_success"| ROUTE
-        WAIT -->|"HumanRejection"| REJECT
         WAIT -->|"HeartbeatTimeout"| TIMEOUT
-        ROUTE --> APPROVE
     end
 
     subgraph UI["Review UI — API Gateway + Lambda"]
-        Q["GET /queue<br/>list pending RCAs<br/>from DynamoDB"]
-        D["GET /rca/{id}<br/>full RCA + AI critic<br/>+ raw log content"]
-        A["POST /approve<br/>send_task_success(token)"]
-        R["POST /reject<br/>send_task_failure(token)<br/>+ feedback form"]
+        Q["GET /queue
+        list pending RCAs from DynamoDB"]
+        D["GET /rca/{id}
+        full RCA + AI critic + raw log"]
+        A["POST /approve
+        send_task_success(token)"]
+        R["POST /reject
+        send_task_failure(token)
+        + feedback type + reason"]
     end
 
-    subgraph OUTPUTS["On Approve"]
-        S3M["S3 raw/ → processed/<br/>log archived"]
-        S3R["S3 rca-results/<br/>RCA JSON written"]
-        ML["MLflow tag<br/>human_verdict=approved<br/>rater_id"]
+    subgraph ON_APPROVE["On Approve"]
+        S3M["S3 raw/ → processed/
+        log archived"]
+        S3R["S3 rca-results/
+        RCA JSON written"]
+        ML["MLflow tag
+        human_verdict=approved · rater_id"]
     end
 
-    subgraph RETRY["On Reject — feedback-in-log"]
-        FBL["New log written to S3 raw/<br/>original log + AI critic output<br/>+ human feedback embedded<br/>as # === comment lines"]
-        NEXT["Next scheduled DAG run<br/>picks up naturally<br/>agents read prior context"]
+    subgraph ON_REJECT["On Reject — feedback-in-log"]
+        FBL["New timestamped log → S3 raw/
+        original log + AI critic output
+        + human feedback as # === blocks"]
+        NEXT["Next scheduled DAG run
+        picks up naturally
+        agents read prior context"]
     end
 
     TRG -->|"starts execution"| STORE
-    Q & D --> UI
-    A -->|"resumes SF"| ROUTE
-    R -->|"resumes SF"| REJECT
+    STORE -->|"task token stored in DynamoDB"| WAIT
+
+    WAIT -.->|"SRE opens UI"| Q
+    Q --> D
+    D --> A & R
+
+    A -->|"send_task_success · resumes SF"| APPROVE
+    R -->|"send_task_failure · resumes SF"| REJECT
+    TIMEOUT --> REJECT
+
     APPROVE --> S3M & S3R & ML
     REJECT --> FBL --> NEXT
+    NEXT -->|"retried on next run"| TRG
+
+    classDef airflow fill:#534AB7,color:#EEEDFE,stroke:#3C3489
+    classDef sf fill:#185FA5,color:#E6F1FB,stroke:#0C447C
+    classDef ui fill:#0F6E56,color:#E1F5EE,stroke:#085041
+    classDef approve fill:#3B6D11,color:#EAF3DE,stroke:#27500A
+    classDef reject fill:#993C1D,color:#FAECE7,stroke:#712B13
+
+    class TRG airflow
+    class STORE,WAIT,APPROVE,REJECT,TIMEOUT sf
+    class Q,D,A,R ui
+    class S3M,S3R,ML approve
+    class FBL,NEXT reject
 ```
+
 
 ### Dual-Critic Quality Gate
 
