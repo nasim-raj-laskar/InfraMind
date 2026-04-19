@@ -111,7 +111,7 @@ graph LR
 
 Rather than writing RCA results directly to storage, the pipeline hands off to a **fully serverless HITL review layer** built on AWS Step Functions, Lambda, API Gateway, and DynamoDB. Airflow fires and forgets — the DAG completes as `SUCCESS` without waiting for a human decision, keeping pipeline slots free regardless of how long review takes.
 
-## [HITL Flow](aws\step-functions\README.md)
+## [HITL Flow](aws/step-functions/README.md)
 ```mermaid
 flowchart TB
     subgraph AIRFLOW["Airflow — last task"]
