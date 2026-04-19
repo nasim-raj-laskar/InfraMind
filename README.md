@@ -281,17 +281,20 @@ InfraMind/
 │   ├── tracker.py          # MLflow helpers
 │   ├── sfn_client.py       # Step Functions start_execution wrapper
 │   └── bedrock_client.py
-├── hitl/
+├── aws/
 │   ├── lambdas/
-│   │   ├── store_for_review.py   # StoreForReview Lambda
-│   │   ├── on_approve.py         # OnApprove Lambda
-│   │   ├── on_reject.py          # OnReject Lambda
-│   │   └── review_ui.py          # ReviewUI Lambda — serves HTML + API routes
-│   └── state_machine.json        # Step Functions ASL definition
+│   │   ├── StoreForReview.py    # StoreForReview Lambda
+│   │   ├── OnApprove.py         # OnApprove Lambda
+│   │   ├── OnReject.py          # OnReject Lambda
+│   │   └── ReviewUI.py          # ReviewUI Lambda — serves HTML + API routes
+│   └── step-functions/
+|        └── Inframind-HILF.json # Step Functions ASL definition
 ├── config/
 │   ├── config.py           # Single source of truth for all config
 │   ├── settings.yaml
+|   ├── logging.yaml
 │   └── models.yaml
+├── monitoring/             # Prometheus setup
 ├── prompts/                # Agent prompt templates
 ├── runbook/                # Markdown runbooks (RAG knowledge base)
 ├── Dockerfile              # Astro Runtime + PYTHONPATH
