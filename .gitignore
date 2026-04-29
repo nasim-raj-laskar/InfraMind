@@ -19,3 +19,4 @@ logs/
 astro
 .astro/
 .DS_Store
+creds.txt
